@@ -21,7 +21,7 @@
 //! ```
 //!
 
-#![allow(dead_code)]
+#![allow(dead_code, non_snake_case)]
 
 extern crate crc;
 extern crate errno;

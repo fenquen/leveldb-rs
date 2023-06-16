@@ -103,7 +103,7 @@ impl Compaction {
         assert!(self.input_version.is_some());
         let inp_version = self.input_version.as_ref().unwrap();
         for level in self.level + 2..NUM_LEVELS {
-            let files = &inp_version.borrow().files[level];
+            let files = &inp_version.borrow().fileMetaHandleVecArr[level];
             while self.level_ixs[level] < files.len() {
                 let f = files[self.level_ixs[level]].borrow();
                 if self.cmp.cmp(k, parse_internal_key(&f.largest).2) <= Ordering::Equal {
@@ -142,9 +142,9 @@ impl Compaction {
         let grandparents = self.grandparents.as_ref().unwrap();
         while self.grandparent_ix < grandparents.len()
             && self
-                .icmp
-                .cmp(k, &grandparents[self.grandparent_ix].borrow().largest)
-                == Ordering::Greater
+            .icmp
+            .cmp(k, &grandparents[self.grandparent_ix].borrow().largest)
+            == Ordering::Greater
         {
             if self.seen_key {
                 self.overlapped_bytes += grandparents[self.grandparent_ix].borrow().size;
@@ -168,7 +168,7 @@ pub struct VersionSet {
     dbname: PathBuf,
     opt: Options,
     cmp: InternalKeyCmp,
-    cache: Shared<TableCache>,
+    tableCache: Shared<TableCache>,
 
     pub next_file_num: u64,
     pub manifest_num: u64,
@@ -176,22 +176,22 @@ pub struct VersionSet {
     pub log_num: u64,
     pub prev_log_num: u64,
 
-    current: Option<Shared<Version>>,
+    currentVersion: Option<Shared<Version>>,
     compaction_ptrs: [Vec<u8>; NUM_LEVELS],
 
     descriptor_log: Option<LogWriter<Box<dyn Write>>>,
 }
 
 impl VersionSet {
-    // Note: opt.cmp should not contain an InternalKeyCmp at this point, but instead the default or
-    // user-supplied one.
-    pub fn new<P: AsRef<Path>>(db: P, opt: Options, cache: Shared<TableCache>) -> VersionSet {
-        let v = share(Version::new(cache.clone(), opt.cmp.clone()));
+    // note: opt.cmp should not contain an InternalKeyCmp at this point, but instead the default or user-supplied one.
+    pub fn new<P: AsRef<Path>>(dbName: P,
+                               options: Options,
+                               tableCache: Shared<TableCache>) -> VersionSet {
         VersionSet {
-            dbname: db.as_ref().to_owned(),
-            cmp: InternalKeyCmp(opt.cmp.clone()),
-            opt,
-            cache,
+            dbname: dbName.as_ref().to_owned(),
+            cmp: InternalKeyCmp(options.cmp.clone()),
+            opt: options,
+            tableCache,
 
             next_file_num: 2,
             manifest_num: 0,
@@ -199,22 +199,22 @@ impl VersionSet {
             log_num: 0,
             prev_log_num: 0,
 
-            current: Some(v),
+            currentVersion: Some(share(Version::new(tableCache.clone(), options.cmp.clone()))),
             compaction_ptrs: Default::default(),
             descriptor_log: None,
         }
     }
 
     pub fn current_summary(&self) -> String {
-        self.current.as_ref().unwrap().borrow().level_summary()
+        self.currentVersion.as_ref().unwrap().borrow().level_summary()
     }
 
     /// live_files returns the files that are currently active.
     pub fn live_files(&self) -> HashSet<FileNum> {
         let mut files = HashSet::new();
-        if let Some(ref version) = self.current {
+        if let Some(ref version) = self.currentVersion {
             for level in 0..NUM_LEVELS {
-                for file in &version.borrow().files[level] {
+                for file in &version.borrow().fileMetaHandleVecArr[level] {
                     files.insert(file.borrow().num);
                 }
             }
@@ -222,15 +222,14 @@ impl VersionSet {
         files
     }
 
-    /// current returns a reference to the current version. It panics if there is no current
-    /// version.
+    /// current returns a reference to the current version. It panics if there is no current version.
     pub fn current(&self) -> Shared<Version> {
-        assert!(self.current.is_some());
-        self.current.as_ref().unwrap().clone()
+        assert!(self.currentVersion.is_some());
+        self.currentVersion.as_ref().unwrap().clone()
     }
 
     pub fn add_version(&mut self, v: Version) {
-        self.current = Some(share(v));
+        self.currentVersion = Some(share(v));
     }
 
     pub fn new_file_number(&mut self) -> FileNum {
@@ -252,8 +251,8 @@ impl VersionSet {
 
     /// needs_compaction returns true if a compaction makes sense at this point.
     pub fn needs_compaction(&self) -> bool {
-        assert!(self.current.is_some());
-        let v = self.current.as_ref().unwrap();
+        assert!(self.currentVersion.is_some());
+        let v = self.currentVersion.as_ref().unwrap();
         let v = v.borrow();
         v.compaction_score.unwrap_or(0.0) >= 1.0 || v.file_to_compact.is_some()
     }
@@ -261,7 +260,7 @@ impl VersionSet {
     fn approximate_offset<'a>(&self, v: &Shared<Version>, key: InternalKey<'a>) -> usize {
         let mut offset = 0;
         for level in 0..NUM_LEVELS {
-            for f in &v.borrow().files[level] {
+            for f in &v.borrow().fileMetaHandleVecArr[level] {
                 if self.opt.cmp.cmp(&f.borrow().largest, key) <= Ordering::Equal {
                     offset += f.borrow().size;
                 } else if self.opt.cmp.cmp(&f.borrow().smallest, key) == Ordering::Greater {
@@ -269,7 +268,7 @@ impl VersionSet {
                     if level > 0 {
                         break;
                     }
-                } else if let Ok(tbl) = self.cache.borrow_mut().get_table(f.borrow().num) {
+                } else if let Ok(tbl) = self.tableCache.borrow_mut().get_table(f.borrow().num) {
                     offset += tbl.approx_offset_of(key);
                 }
             }
@@ -278,11 +277,11 @@ impl VersionSet {
     }
 
     pub fn pick_compaction(&mut self) -> Option<Compaction> {
-        assert!(self.current.is_some());
+        assert!(self.currentVersion.is_some());
         let current = self.current();
         let current = current.borrow();
 
-        let mut c = Compaction::new(&self.opt, 0, self.current.clone());
+        let mut c = Compaction::new(&self.opt, 0, self.currentVersion.clone());
         let level;
 
         // Size compaction?
@@ -290,12 +289,12 @@ impl VersionSet {
             level = current.compaction_level.unwrap();
             assert!(level < NUM_LEVELS - 1);
 
-            for f in &current.files[level] {
+            for f in &current.fileMetaHandleVecArr[level] {
                 if self.compaction_ptrs[level].is_empty()
                     || self
-                        .cmp
-                        .cmp(&f.borrow().largest, &self.compaction_ptrs[level])
-                        == Ordering::Greater
+                    .cmp
+                    .cmp(&f.borrow().largest, &self.compaction_ptrs[level])
+                    == Ordering::Greater
                 {
                     c.add_input(0, f.clone());
                     break;
@@ -304,7 +303,7 @@ impl VersionSet {
 
             if c.num_inputs(0) == 0 {
                 // Add first file in level. This will also reset the compaction pointers.
-                c.add_input(0, current.files[level][0].clone());
+                c.add_input(0, current.fileMetaHandleVecArr[level][0].clone());
             }
         } else if let Some(ref ftc) = current.file_to_compact {
             // Seek compaction?
@@ -315,7 +314,7 @@ impl VersionSet {
         }
 
         c.level = level;
-        c.input_version = self.current.clone();
+        c.input_version = self.currentVersion.clone();
 
         if level == 0 {
             let (smallest, largest) = get_range(&self.cmp, c.inputs[0].iter());
@@ -334,9 +333,9 @@ impl VersionSet {
         from: InternalKey<'a>,
         to: InternalKey<'b>,
     ) -> Option<Compaction> {
-        assert!(self.current.is_some());
+        assert!(self.currentVersion.is_some());
         let mut inputs = self
-            .current
+            .currentVersion
             .as_ref()
             .unwrap()
             .borrow()
@@ -356,7 +355,7 @@ impl VersionSet {
             }
         }
 
-        let mut c = Compaction::new(&self.opt, level, self.current.clone());
+        let mut c = Compaction::new(&self.opt, level, self.currentVersion.clone());
         c.inputs[0] = inputs;
         c.manual = true;
         self.setup_other_inputs(&mut c);
@@ -364,8 +363,8 @@ impl VersionSet {
     }
 
     fn setup_other_inputs(&mut self, compaction: &mut Compaction) {
-        assert!(self.current.is_some());
-        let current = self.current.as_ref().unwrap();
+        assert!(self.currentVersion.is_some());
+        let current = self.currentVersion.as_ref().unwrap();
         let current = current.borrow();
 
         let level = compaction.level;
@@ -427,7 +426,7 @@ impl VersionSet {
         // Set the list of grandparent (l+2) inputs to the files overlapped by the current overall
         // range.
         if level + 2 < NUM_LEVELS {
-            let grandparents = self.current.as_ref().unwrap().borrow().overlapping_inputs(
+            let grandparents = self.currentVersion.as_ref().unwrap().borrow().overlapping_inputs(
                 level + 2,
                 &allstart,
                 &alllimit,
@@ -461,10 +460,10 @@ impl VersionSet {
             }
         }
 
-        let current = self.current.as_ref().unwrap().borrow();
+        let current = self.currentVersion.as_ref().unwrap().borrow();
         // Save files.
         for level in 0..NUM_LEVELS {
-            let fs = &current.files[level];
+            let fs = &current.fileMetaHandleVecArr[level];
             for f in fs {
                 edit.add_file(level, f.borrow().clone());
             }
@@ -478,7 +477,7 @@ impl VersionSet {
     /// log_and_apply merges the given edit with the current state and generates a new version. It
     /// writes the VersionEdit to the manifest.
     pub fn log_and_apply(&mut self, mut edit: VersionEdit) -> Result<()> {
-        assert!(self.current.is_some());
+        assert!(self.currentVersion.is_some());
 
         if edit.log_number.is_none() {
             edit.set_log_num(self.log_num);
@@ -492,11 +491,11 @@ impl VersionSet {
         edit.set_next_file(self.next_file_num);
         edit.set_last_seq(self.last_seq);
 
-        let mut v = Version::new(self.cache.clone(), self.opt.cmp.clone());
+        let mut v = Version::new(self.tableCache.clone(), self.opt.cmp.clone());
         {
             let mut builder = Builder::new();
             builder.apply(&edit, &mut self.compaction_ptrs);
-            builder.save_to(&self.cmp, self.current.as_ref().unwrap(), &mut v);
+            builder.save_to(&self.cmp, self.currentVersion.as_ref().unwrap(), &mut v);
         }
         self.finalize(&mut v);
 
@@ -531,13 +530,13 @@ impl VersionSet {
         for l in 0..NUM_LEVELS - 1 {
             let score: f64;
             if l == 0 {
-                score = v.files[l].len() as f64 / 4.0;
+                score = v.fileMetaHandleVecArr[l].len() as f64 / 4.0;
             } else {
                 let mut max_bytes = 10.0 * f64::from(1 << 20);
                 for _ in 0..l - 1 {
                     max_bytes *= 10.0;
                 }
-                score = total_size(v.files[l].iter()) as f64 / max_bytes;
+                score = total_size(v.fileMetaHandleVecArr[l].iter()) as f64 / max_bytes;
             }
             if let Some(ref mut b) = best_score {
                 if *b < score {
@@ -556,7 +555,7 @@ impl VersionSet {
     /// recover recovers the state of a LevelDB instance from the files on disk. If recover()
     /// returns true, the a manifest needs to be written eventually (using log_and_apply()).
     pub fn recover(&mut self) -> Result<bool> {
-        assert!(self.current.is_some());
+        assert!(self.currentVersion.is_some());
 
         let mut current = read_current_file(&self.opt.env, &self.dbname)?;
         let len = current.len();
@@ -635,8 +634,8 @@ impl VersionSet {
             }
         }
 
-        let mut v = Version::new(self.cache.clone(), self.opt.cmp.clone());
-        builder.save_to(&self.cmp, self.current.as_ref().unwrap(), &mut v);
+        let mut v = Version::new(self.tableCache.clone(), self.opt.cmp.clone());
+        builder.save_to(&self.cmp, self.currentVersion.as_ref().unwrap(), &mut v);
         self.finalize(&mut v);
         self.add_version(v);
         self.manifest_num = self.next_file_num - 1;
@@ -710,7 +709,7 @@ impl VersionSet {
                 // Add individual iterators for L0 tables.
                 for fi in 0..c.num_inputs(i) {
                     let f = &c.inputs[i][fi];
-                    let s = self.cache.borrow_mut().get_table(f.borrow().num);
+                    let s = self.tableCache.borrow_mut().get_table(f.borrow().num);
                     if let Ok(tbl) = s {
                         iters.push(Box::new(tbl.iter()));
                     } else {
@@ -726,7 +725,7 @@ impl VersionSet {
                 // Create concatenating iterator higher levels.
                 iters.push(Box::new(new_version_iter(
                     c.inputs[i].clone(),
-                    self.cache.clone(),
+                    self.tableCache.clone(),
                     self.opt.cmp.clone(),
                 )));
             }
@@ -789,19 +788,19 @@ impl Builder {
             return;
         }
         {
-            let files = &v.files[level];
+            let files = &v.fileMetaHandleVecArr[level];
             if level > 0 && !files.is_empty() {
                 // File must be after last file in level.
                 assert_eq!(
                     cmp.cmp(
                         &files[files.len() - 1].borrow().largest,
-                        &f.borrow().smallest
+                        &f.borrow().smallest,
                     ),
                     Ordering::Less
                 );
             }
         }
-        v.files[level].push(f);
+        v.fileMetaHandleVecArr[level].push(f);
     }
 
     /// save_to saves the edits applied to the builder to v, adding all non-deleted files from
@@ -810,11 +809,11 @@ impl Builder {
         for level in 0..NUM_LEVELS {
             sort_files_by_smallest(cmp, &mut self.added[level]);
             // The base version should already have sorted files.
-            sort_files_by_smallest(cmp, &mut base.borrow_mut().files[level]);
+            sort_files_by_smallest(cmp, &mut base.borrow_mut().fileMetaHandleVecArr[level]);
 
             let added = self.added[level].clone();
-            let basefiles = base.borrow().files[level].clone();
-            v.files[level].reserve(basefiles.len() + self.added[level].len());
+            let basefiles = base.borrow().fileMetaHandleVecArr[level].clone();
+            v.fileMetaHandleVecArr[level].reserve(basefiles.len() + self.added[level].len());
 
             let iadded = added.into_iter();
             let ibasefiles = basefiles.into_iter();
@@ -829,10 +828,10 @@ impl Builder {
             if level == 0 {
                 continue;
             }
-            for i in 1..v.files[level].len() {
+            for i in 1..v.fileMetaHandleVecArr[level].len() {
                 let (prev_end, this_begin) = (
-                    &v.files[level][i - 1].borrow().largest,
-                    &v.files[level][i].borrow().smallest,
+                    &v.fileMetaHandleVecArr[level][i - 1].borrow().largest,
+                    &v.fileMetaHandleVecArr[level][i].borrow().smallest,
                 );
                 assert!(cmp.cmp(prev_end, this_begin) < Ordering::Equal);
             }
@@ -900,8 +899,8 @@ fn sort_files_by_smallest<C: Cmp>(cmp: &C, files: &mut Vec<FileMetaHandle>) {
 fn merge_iters<
     Item,
     C: Fn(&Item, &Item) -> Ordering,
-    I: Iterator<Item = Item>,
-    J: Iterator<Item = Item>,
+    I: Iterator<Item=Item>,
+    J: Iterator<Item=Item>,
 >(
     mut iter_a: I,
     mut iter_b: J,
@@ -941,7 +940,7 @@ fn merge_iters<
 
 /// get_range returns the indices of the files within files that have the smallest lower bound
 /// respectively the largest upper bound.
-fn get_range<'a, C: Cmp, I: Iterator<Item = &'a FileMetaHandle>>(
+fn get_range<'a, C: Cmp, I: Iterator<Item=&'a FileMetaHandle>>(
     c: &C,
     files: I,
 ) -> (Vec<u8>, Vec<u8>) {
@@ -1062,10 +1061,10 @@ mod tests {
         );
         b.save_to(&InternalKeyCmp(opt.cmp.clone()), &v, &mut v2);
         // Second file in L0 was removed.
-        assert_eq!(1, v2.files[0].len());
+        assert_eq!(1, v2.fileMetaHandleVecArr[0].len());
         // File was added to L1.
-        assert_eq!(4, v2.files[1].len());
-        assert_eq!(21, v2.files[1][3].borrow().num);
+        assert_eq!(4, v2.fileMetaHandleVecArr[1].len());
+        assert_eq!(21, v2.fileMetaHandleVecArr[1][3].borrow().num);
     }
 
     #[test]
@@ -1101,8 +1100,8 @@ mod tests {
             assert_eq!(10, vs.log_num);
             assert_eq!(21, vs.next_file_num);
             assert_eq!(30, vs.last_seq);
-            assert_eq!(0, vs.current.as_ref().unwrap().borrow().files[0].len());
-            assert_eq!(0, vs.current.as_ref().unwrap().borrow().files[1].len());
+            assert_eq!(0, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[0].len());
+            assert_eq!(0, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[1].len());
             assert_eq!(35, vs.write_snapshot().unwrap());
         }
 
@@ -1136,8 +1135,8 @@ mod tests {
 
             // The previous "compaction" should have added one file to the first level in the
             // current version.
-            assert_eq!(0, vs.current.as_ref().unwrap().borrow().files[0].len());
-            assert_eq!(1, vs.current.as_ref().unwrap().borrow().files[1].len());
+            assert_eq!(0, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[0].len());
+            assert_eq!(1, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[1].len());
             assert_eq!(63, vs.write_snapshot().unwrap());
         }
     }
@@ -1190,7 +1189,7 @@ mod tests {
             current.borrow_mut().compaction_level = None;
             current.borrow_mut().file_to_compact_lvl = 1;
 
-            let fmd = current.borrow().files[1][0].clone();
+            let fmd = current.borrow().fileMetaHandleVecArr[1][0].clone();
             current.borrow_mut().file_to_compact = Some(fmd);
 
             let c = vs.pick_compaction().unwrap();

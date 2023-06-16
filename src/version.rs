@@ -21,9 +21,9 @@ pub struct GetStats {
 }
 
 pub struct Version {
-    table_cache: Shared<TableCache>,
+    tableCache: Shared<TableCache>,
     user_cmp: Rc<Box<dyn Cmp>>,
-    pub files: [Vec<FileMetaHandle>; NUM_LEVELS],
+    pub fileMetaHandleVecArr: [Vec<FileMetaHandle>; NUM_LEVELS],
 
     pub file_to_compact: Option<FileMetaHandle>,
     pub file_to_compact_lvl: usize,
@@ -32,11 +32,11 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn new(cache: Shared<TableCache>, ucmp: Rc<Box<dyn Cmp>>) -> Version {
+    pub fn new(tableCache: Shared<TableCache>, ucmp: Rc<Box<dyn Cmp>>) -> Version {
         Version {
-            table_cache: cache,
+            tableCache,
             user_cmp: ucmp,
-            files: Default::default(),
+            fileMetaHandleVecArr: Default::default(),
             file_to_compact: None,
             file_to_compact_lvl: 0,
             compaction_score: None,
@@ -46,12 +46,12 @@ impl Version {
 
     pub fn num_level_bytes(&self, l: usize) -> usize {
         assert!(l < NUM_LEVELS);
-        total_size(self.files[l].iter())
+        total_size(self.fileMetaHandleVecArr[l].iter())
     }
 
     pub fn num_level_files(&self, l: usize) -> usize {
         assert!(l < NUM_LEVELS);
-        self.files[l].len()
+        self.fileMetaHandleVecArr[l].len()
     }
 
     /// get returns the value for the specified key using the persistent tables contained in this
@@ -82,7 +82,7 @@ impl Version {
                 // We receive both key and value from the table. Because we're using InternalKey
                 // keys, we now need to check whether the found entry's user key is equal to the
                 // one we're looking for (get() just returns the next-bigger key).
-                if let Ok(Some((k, v))) = self.table_cache.borrow_mut().get(f.borrow().num, ikey) {
+                if let Ok(Some((k, v))) = self.tableCache.borrow_mut().get(f.borrow().num, ikey) {
                     // We don't need to check the sequence number; get() will not return an entry
                     // with a higher sequence number than the one in the supplied key.
                     let (typ, _, foundkey) = parse_internal_key(&k);
@@ -106,7 +106,7 @@ impl Version {
         let ikey = key;
         let ukey = parse_internal_key(key).2;
 
-        let files = &self.files[0];
+        let files = &self.fileMetaHandleVecArr[0];
         levels[0].reserve(files.len());
         for f_ in files {
             let f = f_.borrow();
@@ -125,7 +125,7 @@ impl Version {
 
         let icmp = InternalKeyCmp(self.user_cmp.clone());
         for level in 1..NUM_LEVELS {
-            let files = &self.files[level];
+            let files = &self.fileMetaHandleVecArr[level];
             if let Some(ix) = find_file(&icmp, files, ikey) {
                 let f = files[ix].borrow();
                 let fsmallest = parse_internal_key(&f.smallest).2;
@@ -142,7 +142,7 @@ impl Version {
     pub fn level_summary(&self) -> String {
         let mut acc = String::with_capacity(256);
         for level in 0..NUM_LEVELS {
-            let fs = &self.files[level];
+            let fs = &self.fileMetaHandleVecArr[level];
             if fs.is_empty() {
                 continue;
             }
@@ -240,7 +240,7 @@ impl Version {
     fn max_next_level_overlapping_bytes(&self) -> usize {
         let mut max = 0;
         for lvl in 1..NUM_LEVELS - 1 {
-            for f in &self.files[lvl] {
+            for f in &self.fileMetaHandleVecArr[lvl] {
                 let f = f.borrow();
                 let ols = self.overlapping_inputs(lvl + 1, &f.smallest, &f.largest);
                 let sum = total_size(ols.iter());
@@ -264,14 +264,14 @@ impl Version {
         if level == 0 {
             some_file_overlaps_range_disjoint(
                 &InternalKeyCmp(self.user_cmp.clone()),
-                &self.files[level],
+                &self.fileMetaHandleVecArr[level],
                 smallest,
                 largest,
             )
         } else {
             some_file_overlaps_range(
                 &InternalKeyCmp(self.user_cmp.clone()),
-                &self.files[level],
+                &self.fileMetaHandleVecArr[level],
                 smallest,
                 largest,
             )
@@ -311,7 +311,7 @@ impl Version {
             uend: Vec<u8>,
         ) -> (Option<(Vec<u8>, Vec<u8>)>, Vec<FileMetaHandle>) {
             let mut inputs = vec![];
-            for f_ in myself.files[level].iter() {
+            for f_ in myself.fileMetaHandleVecArr[level].iter() {
                 let f = f_.borrow();
                 let (fsmallest, flargest) = (
                     parse_internal_key(&f.smallest).2,
@@ -350,8 +350,8 @@ impl Version {
     /// only really makes sense for levels > 0.
     fn new_concat_iter(&self, level: usize) -> VersionIter {
         new_version_iter(
-            self.files[level].clone(),
-            self.table_cache.clone(),
+            self.fileMetaHandleVecArr[level].clone(),
+            self.tableCache.clone(),
             self.user_cmp.clone(),
         )
     }
@@ -360,9 +360,9 @@ impl Version {
     /// version.
     pub fn new_iters(&self) -> Result<Vec<Box<dyn LdbIterator>>> {
         let mut iters: Vec<Box<dyn LdbIterator>> = vec![];
-        for f in &self.files[0] {
+        for f in &self.fileMetaHandleVecArr[0] {
             iters.push(Box::new(
-                self.table_cache
+                self.tableCache
                     .borrow_mut()
                     .get_table(f.borrow().num)?
                     .iter(),
@@ -370,7 +370,7 @@ impl Version {
         }
 
         for l in 1..NUM_LEVELS {
-            if !self.files[l].is_empty() {
+            if !self.fileMetaHandleVecArr[l].is_empty() {
                 iters.push(Box::new(self.new_concat_iter(l)));
             }
         }
@@ -707,10 +707,10 @@ pub mod testutil {
 
         let cache = TableCache::new("db", opts.clone(), 100);
         let mut v = Version::new(share(cache), Rc::new(Box::new(DefaultCmp)));
-        v.files[0] = vec![t1, t2];
-        v.files[1] = vec![t3, t4, t5];
-        v.files[2] = vec![t6, t7];
-        v.files[3] = vec![t8, t9];
+        v.fileMetaHandleVecArr[0] = vec![t1, t2];
+        v.fileMetaHandleVecArr[1] = vec![t3, t4, t5];
+        v.fileMetaHandleVecArr[2] = vec![t6, t7];
+        v.fileMetaHandleVecArr[3] = vec![t8, t9];
         (v, opts)
     }
 }
@@ -917,7 +917,7 @@ mod tests {
         assert!(!v.record_read_sample(k.internal_key()));
         assert!(!v.record_read_sample(only_in_one.internal_key()));
 
-        for fs in v.files.iter() {
+        for fs in v.fileMetaHandleVecArr.iter() {
             for f in fs {
                 f.borrow_mut().allowed_seeks = 0;
             }

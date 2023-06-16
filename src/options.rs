@@ -49,8 +49,8 @@ pub struct Options {
     pub block_cache: Shared<Cache<Block>>,
     pub block_size: usize,
     pub block_restart_interval: usize,
-    /// Note: you have to open a database with the same compression type as it was written to, in
-    /// order to not lose data! (this is a bug and will be fixed)
+    /// Note: you have to open a database with the same compression type as it was written to,
+    /// in order to not lose data! (this is a bug and will be fixed)
     pub compression_type: CompressionType,
     pub reuse_logs: bool,
     pub reuse_manifest: bool,
@@ -81,8 +81,8 @@ impl Default for Options {
     }
 }
 
-/// Returns Options that will cause a database to exist purely in-memory instead of being stored on
-/// disk. This is useful for testing or ephemeral databases.
+/// Returns Options that will cause a database to exist purely in-memory instead of being stored on disk.
+/// This is useful for testing or ephemeral databases.
 pub fn in_memory() -> Options {
     let mut opt = Options::default();
     opt.env = Rc::new(Box::new(MemEnv::new()));

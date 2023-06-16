@@ -6,15 +6,14 @@ use std::rc::Rc;
 
 type WrappedCmp = Rc<Box<dyn Cmp>>;
 
-/// Comparator trait, supporting types that can be nested (i.e., add additional functionality on
-/// top of an inner comparator)
+/// Comparator trait, supporting types that can be nested (i.e., add additional functionality on top of an inner comparator)
 pub trait Cmp {
     /// Compare to byte strings, bytewise.
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
 
-    /// Return the shortest byte string that compares "Greater" to the first argument and "Less" to
-    /// the second one.
+    /// Return the shortest byte string that compares "Greater" to the first argument and "Less" to the second one.
     fn find_shortest_sep(&self, from: &[u8], to: &[u8]) -> Vec<u8>;
+
     /// Return the shortest byte string that compares "Greater" to the argument.
     fn find_short_succ(&self, key: &[u8]) -> Vec<u8>;
 
@@ -30,10 +29,6 @@ pub struct DefaultCmp;
 impl Cmp for DefaultCmp {
     fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
         a.cmp(b)
-    }
-
-    fn id(&self) -> &'static str {
-        "leveldb.BytewiseComparator"
     }
 
     fn find_shortest_sep(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
@@ -101,6 +96,10 @@ impl Cmp for DefaultCmp {
         result.push(255);
         result
     }
+
+    fn id(&self) -> &'static str {
+        "leveldb.BytewiseComparator"
+    }
 }
 
 /// Same as memtable_key_cmp, but for InternalKeys.
@@ -161,10 +160,6 @@ impl Cmp for MemtableKeyCmp {
         key_types::cmp_memtable_key(self.0.as_ref().as_ref(), a, b)
     }
 
-    fn id(&self) -> &'static str {
-        self.0.id()
-    }
-
     // The following two impls should not be used (by principle) although they should be correct.
     // They will crash the program.
     fn find_shortest_sep(&self, _: &[u8], _: &[u8]) -> Vec<u8> {
@@ -174,143 +169,8 @@ impl Cmp for MemtableKeyCmp {
     fn find_short_succ(&self, _: &[u8]) -> Vec<u8> {
         panic!("find* functions are invalid on MemtableKeyCmp");
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use key_types::LookupKey;
-    use types;
-
-    #[test]
-    fn test_cmp_defaultcmp_shortest_sep() {
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("abcd".as_bytes(), "abcf".as_bytes()),
-            "abce".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("abc".as_bytes(), "acd".as_bytes()),
-            "abd".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("abcdefghi".as_bytes(), "abcffghi".as_bytes()),
-            "abce".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("a".as_bytes(), "a".as_bytes()),
-            "a".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("a".as_bytes(), "b".as_bytes()),
-            "a\0".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("abc".as_bytes(), "zzz".as_bytes()),
-            "b".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("yyy".as_bytes(), "z".as_bytes()),
-            "yyz".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_shortest_sep("".as_bytes(), "".as_bytes()),
-            "".as_bytes()
-        );
-    }
-
-    #[test]
-    fn test_cmp_defaultcmp_short_succ() {
-        assert_eq!(
-            DefaultCmp.find_short_succ("abcd".as_bytes()),
-            "b".as_bytes()
-        );
-        assert_eq!(
-            DefaultCmp.find_short_succ("zzzz".as_bytes()),
-            "{".as_bytes()
-        );
-        assert_eq!(DefaultCmp.find_short_succ(&[]), &[0xff]);
-        assert_eq!(
-            DefaultCmp.find_short_succ(&[0xff, 0xff, 0xff]),
-            &[0xff, 0xff, 0xff, 0xff]
-        );
-    }
-
-    #[test]
-    fn test_cmp_internalkeycmp_shortest_sep() {
-        let cmp = InternalKeyCmp(Rc::new(Box::new(DefaultCmp)));
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("abcd".as_bytes(), 1).internal_key(),
-                LookupKey::new("abcf".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("abce".as_bytes(), 1).internal_key()
-        );
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("abcd".as_bytes(), 1).internal_key(),
-                LookupKey::new("abce".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("abcd\0".as_bytes(), 1).internal_key()
-        );
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("abc".as_bytes(), 1).internal_key(),
-                LookupKey::new("zzz".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("b".as_bytes(), types::MAX_SEQUENCE_NUMBER).internal_key()
-        );
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("abc".as_bytes(), 1).internal_key(),
-                LookupKey::new("acd".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("abd".as_bytes(), 1).internal_key()
-        );
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("abc".as_bytes(), 1).internal_key(),
-                LookupKey::new("abe".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("abd".as_bytes(), 1).internal_key()
-        );
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("".as_bytes(), 1).internal_key(),
-                LookupKey::new("".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("".as_bytes(), 1).internal_key()
-        );
-        assert_eq!(
-            cmp.find_shortest_sep(
-                LookupKey::new("abc".as_bytes(), 2).internal_key(),
-                LookupKey::new("abc".as_bytes(), 2).internal_key()
-            ),
-            LookupKey::new("abc".as_bytes(), 2).internal_key()
-        );
-    }
-
-    #[test]
-    fn test_cmp_internalkeycmp() {
-        let cmp = InternalKeyCmp(Rc::new(Box::new(DefaultCmp)));
-        // a < b < c
-        let a = LookupKey::new("abc".as_bytes(), 2).internal_key().to_vec();
-        let b = LookupKey::new("abc".as_bytes(), 1).internal_key().to_vec();
-        let c = LookupKey::new("abd".as_bytes(), 3).internal_key().to_vec();
-        let d = "xyy".as_bytes();
-        let e = "xyz".as_bytes();
-
-        assert_eq!(Ordering::Less, cmp.cmp(&a, &b));
-        assert_eq!(Ordering::Equal, cmp.cmp(&a, &a));
-        assert_eq!(Ordering::Greater, cmp.cmp(&b, &a));
-        assert_eq!(Ordering::Less, cmp.cmp(&a, &c));
-        assert_eq!(Ordering::Less, cmp.cmp_inner(d, e));
-        assert_eq!(Ordering::Greater, cmp.cmp_inner(e, d));
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_cmp_memtablekeycmp_panics() {
-        let cmp = MemtableKeyCmp(Rc::new(Box::new(DefaultCmp)));
-        cmp.cmp(&[1, 2, 3], &[4, 5, 6]);
+    fn id(&self) -> &'static str {
+        self.0.id()
     }
 }

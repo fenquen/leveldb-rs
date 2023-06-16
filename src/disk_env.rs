@@ -25,58 +25,62 @@ impl PosixDiskEnv {
     }
 }
 
-/// map_err_with_name annotates an io::Error with information about the operation and the file.
-fn map_err_with_name(method: &'static str, f: &Path, e: io::Error) -> Status {
+///  annotates an io::Error with information about the operation and the file.
+fn map_err_with_name(methodName: &'static str, f: &Path, e: io::Error) -> Status {
     let mut s = Status::from(e);
-    s.err = format!("{}: {}: {}", method, s.err, path_to_str(f));
+    s.err = format!("{}: {}: {}", methodName, s.err, path_to_str(f));
     s
 }
 
 // Note: We're using Ok(f()?) in several locations below in order to benefit from the automatic
 // error conversion using std::convert::From.
 impl Env for PosixDiskEnv {
-    fn open_sequential_file(&self, p: &Path) -> Result<Box<dyn Read>> {
+    fn open_sequential_file(&self, path: &Path) -> Result<Box<dyn Read>> {
         Ok(Box::new(
             fs::OpenOptions::new()
                 .read(true)
-                .open(p)
-                .map_err(|e| map_err_with_name("open (seq)", p, e))?,
+                .open(path)
+                .map_err(|e| map_err_with_name("open (seq)", path, e))?,
         ))
     }
-    fn open_random_access_file(&self, p: &Path) -> Result<Box<dyn RandomAccess>> {
+
+    fn open_random_access_file(&self, path: &Path) -> Result<Box<dyn RandomAccess>> {
         Ok(fs::OpenOptions::new()
             .read(true)
-            .open(p)
+            .open(path)
             .map(|f| {
                 let b: Box<dyn RandomAccess> = Box::new(f);
                 b
             })
-            .map_err(|e| map_err_with_name("open (randomaccess)", p, e))?)
+            .map_err(|e| map_err_with_name("open (randomaccess)", path, e))?)
     }
-    fn open_writable_file(&self, p: &Path) -> Result<Box<dyn Write>> {
+
+    fn open_writable_file(&self, path: &Path) -> Result<Box<dyn Write>> {
         Ok(Box::new(
             fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .append(false)
-                .open(p)
-                .map_err(|e| map_err_with_name("open (write)", p, e))?,
+                .open(path)
+                .map_err(|e| map_err_with_name("open (write)", path, e))?,
         ))
     }
-    fn open_appendable_file(&self, p: &Path) -> Result<Box<dyn Write>> {
+
+    fn open_appendable_file(&self, path: &Path) -> Result<Box<dyn Write>> {
         Ok(Box::new(
             fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .append(true)
-                .open(p)
-                .map_err(|e| map_err_with_name("open (append)", p, e))?,
+                .open(path)
+                .map_err(|e| map_err_with_name("open (append)", path, e))?,
         ))
     }
 
     fn exists(&self, p: &Path) -> Result<bool> {
         Ok(p.exists())
     }
+
     fn children(&self, p: &Path) -> Result<Vec<PathBuf>> {
         let dir_reader = fs::read_dir(p).map_err(|e| map_err_with_name("children", p, e))?;
         let filenames = dir_reader
@@ -90,6 +94,7 @@ impl Env for PosixDiskEnv {
             .filter(|s| !s.as_os_str().is_empty());
         Ok(Vec::from_iter(filenames))
     }
+
     fn size_of(&self, p: &Path) -> Result<usize> {
         let meta = fs::metadata(p).map_err(|e| map_err_with_name("size_of", p, e))?;
         Ok(meta.len() as usize)
@@ -98,12 +103,15 @@ impl Env for PosixDiskEnv {
     fn delete(&self, p: &Path) -> Result<()> {
         Ok(fs::remove_file(p).map_err(|e| map_err_with_name("delete", p, e))?)
     }
+
     fn mkdir(&self, p: &Path) -> Result<()> {
         Ok(fs::create_dir_all(p).map_err(|e| map_err_with_name("mkdir", p, e))?)
     }
+
     fn rmdir(&self, p: &Path) -> Result<()> {
         Ok(fs::remove_dir_all(p).map_err(|e| map_err_with_name("rmdir", p, e))?)
     }
+
     fn rename(&self, old: &Path, new: &Path) -> Result<()> {
         Ok(fs::rename(old, new).map_err(|e| map_err_with_name("rename", old, e))?)
     }
@@ -125,13 +133,13 @@ impl Env for PosixDiskEnv {
                     return Err(Status::new(
                         StatusCode::LockError,
                         "lock on database is already held by different process",
-                    ))
+                    ));
                 }
                 Err(_) => {
                     return Err(Status::new(
                         StatusCode::Errno(errno::errno()),
                         &format!("unknown lock error on file {:?} (file {})", f, p.display()),
-                    ))
+                    ));
                 }
                 _ => (),
             };

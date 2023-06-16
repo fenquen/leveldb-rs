@@ -27,27 +27,29 @@ fn filenum_to_key(num: FileNum) -> cache::CacheKey {
 }
 
 pub struct TableCache {
-    dbname: PathBuf,
+    dbName: PathBuf,
     cache: Cache<Table>,
-    opts: Options,
+    options: Options,
 }
 
 impl TableCache {
     /// Create a new TableCache for the database named `db`, caching up to `entries` tables.
     ///
     /// opt.cmp should be the user-supplied comparator.
-    pub fn new<P: AsRef<Path>>(db: P, opt: Options, entries: usize) -> TableCache {
+    pub fn new<P: AsRef<Path>>(dbName: P,
+                               options: Options,
+                               cacheCapacity: usize) -> TableCache {
         TableCache {
-            dbname: db.as_ref().to_owned(),
-            cache: Cache::new(entries),
-            opts: opt,
+            dbName: dbName.as_ref().to_owned(),
+            cache: Cache::new(cacheCapacity),
+            options,
         }
     }
 
-    pub fn get<'a>(
+    pub fn get(
         &mut self,
         file_num: FileNum,
-        key: InternalKey<'a>,
+        key: InternalKey,
     ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let tbl = self.get_table(file_num)?;
         tbl.get(key)
@@ -64,15 +66,15 @@ impl TableCache {
 
     /// Open a table on the file system and read it.
     fn open_table(&mut self, file_num: FileNum) -> Result<Table> {
-        let name = table_file_name(&self.dbname, file_num);
+        let name = table_file_name(&self.dbName, file_num);
         let path = Path::new(&name);
-        let file_size = self.opts.env.size_of(&path)?;
+        let file_size = self.options.env.size_of(&path)?;
         if file_size == 0 {
             return err(StatusCode::InvalidData, "file is empty");
         }
-        let file = Rc::new(self.opts.env.open_random_access_file(&path)?);
+        let file = Rc::new(self.options.env.open_random_access_file(&path)?);
         // No SSTable file name compatibility.
-        let table = Table::new(self.opts.clone(), file, file_size)?;
+        let table = Table::new(self.options.clone(), file, file_size)?;
         self.cache.insert(&filenum_to_key(file_num), table.clone());
         Ok(table)
     }

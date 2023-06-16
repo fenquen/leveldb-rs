@@ -170,7 +170,7 @@ pub fn parse_file_name<P: AsRef<Path>>(ff: P) -> Result<(FileNum, FileType)> {
                     return err(
                         StatusCode::InvalidArgument,
                         "unknown numbered file extension",
-                    )
+                    );
                 }
             };
             return Ok((num, typ));

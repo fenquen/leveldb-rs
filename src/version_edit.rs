@@ -57,7 +57,7 @@ fn read_length_prefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
     }
 }
 
-/// Manages changes to the set of managed SSTables and logfiles.
+/// manages changes to the set of managed SSTables and logfiles.
 pub struct VersionEdit {
     comparator: Option<String>,
     pub log_number: Option<FileNum>,
