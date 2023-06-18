@@ -166,7 +166,7 @@ impl Compaction {
 /// contains references to the files on disk as they were at a certain point.
 pub struct VersionSet {
     dbname: PathBuf,
-    opt: Options,
+    options: Options,
     cmp: InternalKeyCmp,
     tableCache: Shared<TableCache>,
 
@@ -190,8 +190,8 @@ impl VersionSet {
         VersionSet {
             dbname: dbName.as_ref().to_owned(),
             cmp: InternalKeyCmp(options.cmp.clone()),
-            opt: options,
-            tableCache,
+            options:options.clone(),
+            tableCache:tableCache.clone(),
 
             next_file_num: 2,
             manifest_num: 0,
@@ -199,7 +199,7 @@ impl VersionSet {
             log_num: 0,
             prev_log_num: 0,
 
-            currentVersion: Some(share(Version::new(tableCache.clone(), options.cmp.clone()))),
+            currentVersion: Some(share(Version::new(tableCache, options.cmp.clone()))),
             compaction_ptrs: Default::default(),
             descriptor_log: None,
         }
@@ -261,9 +261,9 @@ impl VersionSet {
         let mut offset = 0;
         for level in 0..NUM_LEVELS {
             for f in &v.borrow().fileMetaHandleVecArr[level] {
-                if self.opt.cmp.cmp(&f.borrow().largest, key) <= Ordering::Equal {
+                if self.options.cmp.cmp(&f.borrow().largest, key) <= Ordering::Equal {
                     offset += f.borrow().size;
-                } else if self.opt.cmp.cmp(&f.borrow().smallest, key) == Ordering::Greater {
+                } else if self.options.cmp.cmp(&f.borrow().smallest, key) == Ordering::Greater {
                     // In higher levels, files are sorted; we don't need to search further.
                     if level > 0 {
                         break;
@@ -281,7 +281,7 @@ impl VersionSet {
         let current = self.current();
         let current = current.borrow();
 
-        let mut c = Compaction::new(&self.opt, 0, self.currentVersion.clone());
+        let mut c = Compaction::new(&self.options, 0, self.currentVersion.clone());
         let level;
 
         // Size compaction?
@@ -348,14 +348,14 @@ impl VersionSet {
             let mut total = 0;
             for i in 0..inputs.len() {
                 total += inputs[i].borrow().size;
-                if total > self.opt.max_file_size {
+                if total > self.options.max_file_size {
                     inputs.truncate(i + 1);
                     break;
                 }
             }
         }
 
-        let mut c = Compaction::new(&self.opt, level, self.currentVersion.clone());
+        let mut c = Compaction::new(&self.options, level, self.currentVersion.clone());
         c.inputs[0] = inputs;
         c.manual = true;
         self.setup_other_inputs(&mut c);
@@ -388,13 +388,13 @@ impl VersionSet {
             let expanded0_size = total_size(expanded0.iter());
             // ...if we picked up more files in the current level, and the total size is acceptable
             if expanded0.len() > compaction.num_inputs(0)
-                && (inputs1_size + expanded0_size) < 25 * self.opt.max_file_size
+                && (inputs1_size + expanded0_size) < 25 * self.options.max_file_size
             {
                 let (new_start, new_limit) = get_range(&self.cmp, expanded0.iter());
                 let expanded1 = current.overlapping_inputs(level + 1, &new_start, &new_limit);
                 if expanded1.len() == compaction.num_inputs(1) {
                     log!(
-                        self.opt.log,
+                        self.options.log,
                         "Expanding inputs@{} {}+{} ({}+{} bytes) to {}+{} ({}+{} bytes)",
                         level,
                         compaction.inputs[0].len(),
@@ -435,7 +435,7 @@ impl VersionSet {
         }
 
         log!(
-            self.opt.log,
+            self.options.log,
             "Compacting @{} {:?} .. {:?}",
             level,
             smallest,
@@ -451,7 +451,7 @@ impl VersionSet {
         assert!(self.descriptor_log.is_some());
 
         let mut edit = VersionEdit::new();
-        edit.set_comparator_name(self.opt.cmp.id());
+        edit.set_comparator_name(self.options.cmp.id());
 
         // Save compaction pointers.
         for level in 0..NUM_LEVELS {
@@ -479,19 +479,19 @@ impl VersionSet {
     pub fn log_and_apply(&mut self, mut edit: VersionEdit) -> Result<()> {
         assert!(self.currentVersion.is_some());
 
-        if edit.log_number.is_none() {
+        if edit.logNumber.is_none() {
             edit.set_log_num(self.log_num);
         } else {
-            assert!(edit.log_number.unwrap() >= self.log_num);
-            assert!(edit.log_number.unwrap() < self.next_file_num);
+            assert!(edit.logNumber.unwrap() >= self.log_num);
+            assert!(edit.logNumber.unwrap() < self.next_file_num);
         }
-        if edit.prev_log_number.is_none() {
+        if edit.prevLogNumber.is_none() {
             edit.set_prev_log_num(self.prev_log_num);
         }
         edit.set_next_file(self.next_file_num);
         edit.set_last_seq(self.last_seq);
 
-        let mut v = Version::new(self.tableCache.clone(), self.opt.cmp.clone());
+        let mut v = Version::new(self.tableCache.clone(), self.options.cmp.clone());
         {
             let mut builder = Builder::new();
             builder.apply(&edit, &mut self.compaction_ptrs);
@@ -503,7 +503,7 @@ impl VersionSet {
             let descname = manifest_file_name(&self.dbname, self.manifest_num);
             edit.set_next_file(self.next_file_num);
             self.descriptor_log = Some(LogWriter::new(
-                self.opt.env.open_writable_file(Path::new(&descname))?,
+                self.options.env.open_writable_file(Path::new(&descname))?,
             ));
             self.write_snapshot()?;
         }
@@ -513,11 +513,11 @@ impl VersionSet {
             lw.add_record(&encoded)?;
             lw.flush()?;
         }
-        set_current_file(&self.opt.env, &self.dbname, self.manifest_num)?;
+        set_current_file(&self.options.env, &self.dbname, self.manifest_num)?;
 
         self.add_version(v);
         // log_number was set above.
-        self.log_num = edit.log_number.unwrap();
+        self.log_num = edit.logNumber.unwrap();
 
         // TODO: Roll back written files if something went wrong.
         Ok(())
@@ -557,46 +557,44 @@ impl VersionSet {
     pub fn recover(&mut self) -> Result<bool> {
         assert!(self.currentVersion.is_some());
 
-        let mut current = read_current_file(&self.opt.env, &self.dbname)?;
-        let len = current.len();
-        current.truncate(len - 1);
-        let current = Path::new(&current);
+        let mut currentFileContent = readCurrentFile(&self.options.env, &self.dbname)?;
+        let len = currentFileContent.len();
+        currentFileContent.truncate(len - 1);
+        let manifestFileName = Path::new(&currentFileContent);
 
-        let descfilename = self.dbname.join(current);
+        let manifestFilePath = self.dbname.join(manifestFileName);
+
         let mut builder = Builder::new();
+
         {
-            let mut descfile = self
-                .opt
-                .env
-                .open_sequential_file(Path::new(&descfilename))?;
-            let mut logreader = LogReader::new(
-                &mut descfile,
-                // checksum=
-                true,
-            );
+            let mut manifestFile = self.options.env.open_sequential_file(Path::new(&manifestFilePath))?;
+
+            let mut logReader = LogReader::new(&mut manifestFile, true);
 
             let mut log_number = None;
             let mut prev_log_number = None;
             let mut next_file_number = None;
             let mut last_seq = None;
 
-            let mut buf = Vec::new();
-            while let Ok(size) = logreader.read(&mut buf) {
+            let mut buffer = Vec::new();
+            while let Ok(size) = logReader.read(&mut buffer) {
                 if size == 0 {
                     break;
                 }
-                let edit = VersionEdit::decode_from(&buf)?;
-                builder.apply(&edit, &mut self.compaction_ptrs);
-                if let Some(ln) = edit.log_number {
+
+                let versionEdit = VersionEdit::decodeFrom(&buffer)?;
+                builder.apply(&versionEdit, &mut self.compaction_ptrs);
+
+                if let Some(ln) = versionEdit.logNumber {
                     log_number = Some(ln);
                 }
-                if let Some(nfn) = edit.next_file_number {
+                if let Some(nfn) = versionEdit.next_file_number {
                     next_file_number = Some(nfn);
                 }
-                if let Some(ls) = edit.last_seq {
+                if let Some(ls) = versionEdit.last_seq {
                     last_seq = Some(ls);
                 }
-                if let Some(pln) = edit.prev_log_number {
+                if let Some(pln) = versionEdit.prevLogNumber {
                     prev_log_number = Some(pln);
                 }
             }
@@ -605,27 +603,21 @@ impl VersionSet {
                 self.log_num = ln;
                 self.mark_file_number_used(ln);
             } else {
-                return err(
-                    StatusCode::Corruption,
-                    "no meta-lognumber entry in descriptor",
-                );
+                return err(StatusCode::Corruption, "no meta-lognumber entry in descriptor");
             }
+
             if let Some(nfn) = next_file_number {
                 self.next_file_num = nfn + 1;
             } else {
-                return err(
-                    StatusCode::Corruption,
-                    "no meta-next-file entry in descriptor",
-                );
+                return err(StatusCode::Corruption, "no meta-next-file entry in descriptor");
             }
+
             if let Some(ls) = last_seq {
                 self.last_seq = ls;
             } else {
-                return err(
-                    StatusCode::Corruption,
-                    "no last-sequence entry in descriptor",
-                );
+                return err(StatusCode::Corruption, "no last-sequence entry in descriptor");
             }
+
             if let Some(pln) = prev_log_number {
                 self.prev_log_num = pln;
                 self.mark_file_number_used(prev_log_number.unwrap());
@@ -634,15 +626,14 @@ impl VersionSet {
             }
         }
 
-        let mut v = Version::new(self.tableCache.clone(), self.opt.cmp.clone());
+        let mut v = Version::new(self.tableCache.clone(), self.options.cmp.clone());
         builder.save_to(&self.cmp, self.currentVersion.as_ref().unwrap(), &mut v);
         self.finalize(&mut v);
         self.add_version(v);
         self.manifest_num = self.next_file_num - 1;
         log!(
-            self.opt.log,
-            "Recovered manifest with next_file={} manifest_num={} log_num={} prev_log_num={} \
-             last_seq={}",
+            self.options.log,
+            "Recovered manifest with next_file={} manifest_num={} log_num={} prev_log_num={} last_seq={}",
             self.next_file_num,
             self.manifest_num,
             self.log_num,
@@ -651,46 +642,45 @@ impl VersionSet {
         );
 
         // A new manifest needs to be written only if we don't reuse the existing one.
-        Ok(!self.reuse_manifest(&descfilename, &current))
+        Ok(!self.reuse_manifest(&manifestFilePath, &manifestFileName))
     }
 
     /// reuse_manifest checks whether the current manifest can be reused.
-    fn reuse_manifest(
-        &mut self,
-        current_manifest_path: &Path,
-        current_manifest_base: &Path,
-    ) -> bool {
+    fn reuse_manifest(&mut self,
+                      current_manifest_path: &Path,
+                      current_manifest_base: &Path, ) -> bool {
         // Note: The original has only one option, reuse_logs; reuse_logs has to be set in order to
         // reuse manifests.
         // However, there's not much that stops us from reusing manifests without reusing logs or
         // vice versa. One issue exists though: If no write operations are done, empty log files
         // will accumulate every time a DB is opened, until at least one write happens (otherwise,
         // the logs won't be compacted and deleted).
-        if !self.opt.reuse_manifest {
+        if !self.options.reuse_manifest {
             return false;
         }
+
         // The original doesn't reuse manifests; we do.
         if let Ok((num, typ)) = parse_file_name(current_manifest_base) {
             if typ != FileType::Descriptor {
                 return false;
             }
-            if let Ok(size) = self.opt.env.size_of(Path::new(current_manifest_path)) {
-                if size >= self.opt.max_file_size {
+            if let Ok(size) = self.options.env.size_of(Path::new(current_manifest_path)) {
+                if size >= self.options.max_file_size {
                     return false;
                 }
 
                 assert!(self.descriptor_log.is_none());
                 let s = self
-                    .opt
+                    .options
                     .env
                     .open_appendable_file(Path::new(current_manifest_path));
                 if let Ok(f) = s {
-                    log!(self.opt.log, "reusing manifest {:?}", current_manifest_path);
+                    log!(self.options.log, "reusing manifest {:?}", current_manifest_path);
                     self.descriptor_log = Some(LogWriter::new_with_off(f, size));
                     self.manifest_num = num;
                     return true;
                 } else {
-                    log!(self.opt.log, "reuse_manifest: {}", s.err().unwrap());
+                    log!(self.options.log, "reuse_manifest: {}", s.err().unwrap());
                 }
             }
         }
@@ -714,7 +704,7 @@ impl VersionSet {
                         iters.push(Box::new(tbl.iter()));
                     } else {
                         log!(
-                            self.opt.log,
+                            self.options.log,
                             "error opening table {}: {}",
                             f.borrow().num,
                             s.err().unwrap()
@@ -726,7 +716,7 @@ impl VersionSet {
                 iters.push(Box::new(new_version_iter(
                     c.inputs[i].clone(),
                     self.tableCache.clone(),
-                    self.opt.cmp.clone(),
+                    self.options.cmp.clone(),
                 )));
             }
         }
@@ -753,7 +743,7 @@ impl Builder {
     /// apply applies the edits recorded in edit to the builder state. compaction pointers are
     /// copied to the supplied compaction_ptrs array.
     fn apply(&mut self, edit: &VersionEdit, compaction_ptrs: &mut [Vec<u8>; NUM_LEVELS]) {
-        for c in edit.compaction_ptrs.iter() {
+        for c in edit.compactionPointerVec.iter() {
             compaction_ptrs[c.level] = c.key.clone();
         }
         for &(level, num) in edit.deleted.iter() {
@@ -851,28 +841,27 @@ fn temp_file_name<P: AsRef<Path>>(dbname: P, file_num: FileNum) -> PathBuf {
     dbname.as_ref().join(format!("{:06}.dbtmp", file_num))
 }
 
-fn current_file_name<P: AsRef<Path>>(dbname: P) -> PathBuf {
-    dbname.as_ref().join("CURRENT").to_owned()
+fn currentFilePath<P: AsRef<Path>>(dbName: P) -> PathBuf {
+    dbName.as_ref().join("CURRENT").to_owned()
 }
 
-pub fn read_current_file(env: &Box<dyn Env>, dbname: &Path) -> Result<String> {
-    let mut current = String::new();
-    let mut f = env.open_sequential_file(Path::new(&current_file_name(dbname)))?;
-    f.read_to_string(&mut current)?;
-    if current.is_empty() || !current.ends_with('\n') {
-        return err(
-            StatusCode::Corruption,
-            "current file is empty or has no newline",
-        );
+/// CURRENT 文件的内容应该是MANIFEST文件的名字
+pub fn readCurrentFile(env: &Box<dyn Env>, dbname: &Path) -> Result<String> {
+    let mut currentFileContent = String::new();
+    let mut f = env.open_sequential_file(Path::new(&currentFilePath(dbname)))?;
+
+    f.read_to_string(&mut currentFileContent)?;
+
+    if currentFileContent.is_empty() || !currentFileContent.ends_with('\n') {
+        return err(StatusCode::Corruption, "current file is empty or has no newline");
     }
-    Ok(current)
+
+    Ok(currentFileContent)
 }
 
-pub fn set_current_file<P: AsRef<Path>>(
-    env: &Box<dyn Env>,
-    dbname: P,
-    manifest_file_num: FileNum,
-) -> Result<()> {
+pub fn set_current_file<P: AsRef<Path>>(env: &Box<dyn Env>,
+                                        dbname: P,
+                                        manifest_file_num: FileNum) -> Result<()> {
     let dbname = dbname.as_ref();
     let manifest_base = manifest_name(manifest_file_num);
     let tempfile = temp_file_name(dbname, manifest_file_num);
@@ -881,7 +870,7 @@ pub fn set_current_file<P: AsRef<Path>>(
         f.write_all(manifest_base.display().to_string().as_bytes())?;
         f.write_all(b"\n")?;
     }
-    let currentfile = current_file_name(dbname);
+    let currentfile = currentFilePath(dbname);
     if let Err(e) = env.rename(Path::new(&tempfile), Path::new(&currentfile)) {
         // ignore error.
         let _ = env.delete(Path::new(&tempfile));
@@ -962,367 +951,4 @@ fn get_range<'a, C: Cmp, I: Iterator<Item=&'a FileMetaHandle>>(
         }
     }
     (smallest.unwrap(), largest.unwrap())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cmp::DefaultCmp;
-    use crate::key_types::LookupKey;
-    use crate::test_util::LdbIteratorIter;
-    use crate::types::FileMetaData;
-    use crate::version::testutil::make_version;
-
-    fn example_files() -> Vec<FileMetaHandle> {
-        let mut f1 = FileMetaData::default();
-        f1.num = 1;
-        f1.size = 10;
-        f1.smallest = "f".as_bytes().to_vec();
-        f1.largest = "g".as_bytes().to_vec();
-        let mut f2 = FileMetaData::default();
-        f2.num = 2;
-        f2.size = 20;
-        f2.smallest = "e".as_bytes().to_vec();
-        f2.largest = "f".as_bytes().to_vec();
-        let mut f3 = FileMetaData::default();
-        f3.num = 3;
-        f3.size = 30;
-        f3.smallest = "a".as_bytes().to_vec();
-        f3.largest = "b".as_bytes().to_vec();
-        let mut f4 = FileMetaData::default();
-        f4.num = 4;
-        f4.size = 40;
-        f4.smallest = "q".as_bytes().to_vec();
-        f4.largest = "z".as_bytes().to_vec();
-        vec![f1, f2, f3, f4].into_iter().map(share).collect()
-    }
-
-    #[test]
-    fn test_version_set_merge_iters() {
-        let v1 = vec![2, 4, 6, 8, 10];
-        let v2 = vec![1, 3, 5, 7];
-        assert_eq!(
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 10],
-            merge_iters(v1.into_iter(), v2.into_iter(), |a, b| a.cmp(&b))
-        );
-    }
-
-    #[test]
-    fn test_version_set_total_size() {
-        assert_eq!(100, total_size(example_files().iter()));
-    }
-
-    #[test]
-    fn test_version_set_get_range() {
-        let cmp = DefaultCmp;
-        let fs = example_files();
-        assert_eq!(
-            ("a".as_bytes().to_vec(), "z".as_bytes().to_vec()),
-            get_range(&cmp, fs.iter())
-        );
-    }
-
-    #[test]
-    fn test_version_set_builder() {
-        let (v, opt) = make_version();
-        let v = share(v);
-
-        let mut fmd = FileMetaData::default();
-        fmd.num = 21;
-        fmd.size = 123;
-        fmd.smallest = LookupKey::new("klm".as_bytes(), 777)
-            .internal_key()
-            .to_vec();
-        fmd.largest = LookupKey::new("kop".as_bytes(), 700)
-            .internal_key()
-            .to_vec();
-
-        let mut ve = VersionEdit::new();
-        ve.add_file(1, fmd);
-        // This deletion should be undone by apply().
-        ve.delete_file(1, 21);
-        ve.delete_file(0, 2);
-        ve.set_compact_pointer(2, LookupKey::new("xxx".as_bytes(), 123).internal_key());
-
-        let mut b = Builder::new();
-        let mut ptrs: [Vec<u8>; NUM_LEVELS] = Default::default();
-        b.apply(&ve, &mut ptrs);
-
-        assert_eq!(
-            &[120 as u8, 120, 120, 1, 123, 0, 0, 0, 0, 0, 0],
-            ptrs[2].as_slice()
-        );
-        assert_eq!(2, b.deleted[0][0]);
-        assert_eq!(1, b.added[1].len());
-
-        let mut v2 = Version::new(
-            share(TableCache::new("db", opt.clone(), 100)),
-            opt.cmp.clone(),
-        );
-        b.save_to(&InternalKeyCmp(opt.cmp.clone()), &v, &mut v2);
-        // Second file in L0 was removed.
-        assert_eq!(1, v2.fileMetaHandleVecArr[0].len());
-        // File was added to L1.
-        assert_eq!(4, v2.fileMetaHandleVecArr[1].len());
-        assert_eq!(21, v2.fileMetaHandleVecArr[1][3].borrow().num);
-    }
-
-    #[test]
-    fn test_version_set_log_and_apply() {
-        let (_, opt) = make_version();
-        let mut vs = VersionSet::new(
-            "db",
-            opt.clone(),
-            share(TableCache::new("db", opt.clone(), 100)),
-        );
-
-        assert_eq!(2, vs.new_file_number());
-        // Simulate NewDB
-        {
-            let mut ve = VersionEdit::new();
-            ve.set_comparator_name("leveldb.BytewiseComparator");
-            ve.set_log_num(10);
-            ve.set_next_file(20);
-            ve.set_last_seq(30);
-
-            // Write first manifest to be recovered from.
-            let manifest = manifest_file_name("db", 19);
-            let mffile = opt.env.open_writable_file(Path::new(&manifest)).unwrap();
-            let mut lw = LogWriter::new(mffile);
-            lw.add_record(&ve.encode()).unwrap();
-            lw.flush().unwrap();
-            set_current_file(&opt.env.as_ref(), "db", 19).unwrap();
-        }
-
-        // Recover from new state.
-        {
-            vs.recover().unwrap();
-            assert_eq!(10, vs.log_num);
-            assert_eq!(21, vs.next_file_num);
-            assert_eq!(30, vs.last_seq);
-            assert_eq!(0, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[0].len());
-            assert_eq!(0, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[1].len());
-            assert_eq!(35, vs.write_snapshot().unwrap());
-        }
-
-        // Simulate compaction by adding a file.
-        {
-            let mut ve = VersionEdit::new();
-            ve.set_log_num(11);
-            let mut fmd = FileMetaData::default();
-            fmd.num = 21;
-            fmd.size = 123;
-            fmd.smallest = LookupKey::new("abc".as_bytes(), 777)
-                .internal_key()
-                .to_vec();
-            fmd.largest = LookupKey::new("def".as_bytes(), 700)
-                .internal_key()
-                .to_vec();
-            ve.add_file(1, fmd);
-            vs.log_and_apply(ve).unwrap();
-
-            assert!(opt.env.exists(&Path::new("db").join("CURRENT")).unwrap());
-            assert!(opt
-                .env
-                .exists(&Path::new("db").join("MANIFEST-000019"))
-                .unwrap());
-            // next_file_num and last_seq are untouched by log_and_apply
-            assert_eq!(21, vs.new_file_number());
-            assert_eq!(22, vs.next_file_num);
-            assert_eq!(30, vs.last_seq);
-            // the following fields are touched by log_and_apply.
-            assert_eq!(11, vs.log_num);
-
-            // The previous "compaction" should have added one file to the first level in the
-            // current version.
-            assert_eq!(0, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[0].len());
-            assert_eq!(1, vs.currentVersion.as_ref().unwrap().borrow().fileMetaHandleVecArr[1].len());
-            assert_eq!(63, vs.write_snapshot().unwrap());
-        }
-    }
-
-    #[test]
-    fn test_version_set_utils() {
-        let (v, opt) = make_version();
-        let mut vs = VersionSet::new("db", opt.clone(), share(TableCache::new("db", opt, 100)));
-        vs.add_version(v);
-        // live_files()
-        assert_eq!(9, vs.live_files().len());
-        assert!(vs.live_files().contains(&3));
-
-        let v = vs.current();
-        let v = v.borrow();
-        // num_level_bytes()
-        assert_eq!(483, v.num_level_bytes(0));
-        assert_eq!(651, v.num_level_bytes(1));
-        assert_eq!(468, v.num_level_bytes(2));
-        // num_level_files()
-        assert_eq!(2, v.num_level_files(0));
-        assert_eq!(3, v.num_level_files(1));
-        assert_eq!(2, v.num_level_files(2));
-        // new_file_number()
-        assert_eq!(2, vs.new_file_number());
-        assert_eq!(3, vs.new_file_number());
-    }
-
-    #[test]
-    fn test_version_set_pick_compaction() {
-        let (mut v, opt) = make_version();
-        let mut vs = VersionSet::new("db", opt.clone(), share(TableCache::new("db", opt, 100)));
-
-        v.compaction_score = Some(2.0);
-        v.compaction_level = Some(0);
-        vs.add_version(v);
-
-        // Size compaction
-        {
-            let c = vs.pick_compaction().unwrap();
-            assert_eq!(2, c.inputs[0].len());
-            assert_eq!(1, c.inputs[1].len());
-            assert_eq!(0, c.level);
-            assert!(c.input_version.is_some());
-        }
-        // Seek compaction
-        {
-            let current = vs.current();
-            current.borrow_mut().compaction_score = None;
-            current.borrow_mut().compaction_level = None;
-            current.borrow_mut().file_to_compact_lvl = 1;
-
-            let fmd = current.borrow().fileMetaHandleVecArr[1][0].clone();
-            current.borrow_mut().file_to_compact = Some(fmd);
-
-            let c = vs.pick_compaction().unwrap();
-            assert_eq!(3, c.inputs[0].len()); // inputs on l+0 are expanded.
-            assert_eq!(1, c.inputs[1].len());
-            assert_eq!(1, c.level);
-            assert!(c.input_version.is_some());
-        }
-    }
-
-    /// iterator_properties tests that it contains len elements and that they are ordered in
-    /// ascending order by cmp.
-    fn iterator_properties<It: LdbIterator>(mut it: It, len: usize, cmp: Rc<Box<dyn Cmp>>) {
-        let mut wr = LdbIteratorIter::wrap(&mut it);
-        let first = wr.next().unwrap();
-        let mut count = 1;
-        wr.fold(first, |(a, _), (b, c)| {
-            assert_eq!(Ordering::Less, cmp.cmp(&a, &b));
-            count += 1;
-            (b, c)
-        });
-        assert_eq!(len, count);
-    }
-
-    #[test]
-    fn test_version_set_compaction() {
-        let (v, opt) = make_version();
-        let mut vs = VersionSet::new("db", opt.clone(), share(TableCache::new("db", opt, 100)));
-        time_test!();
-        vs.add_version(v);
-
-        {
-            // approximate_offset()
-            let v = vs.current();
-            assert_eq!(
-                0,
-                vs.approximate_offset(&v, LookupKey::new("aaa".as_bytes(), 9000).internal_key())
-            );
-            assert_eq!(
-                232,
-                vs.approximate_offset(&v, LookupKey::new("bab".as_bytes(), 9000).internal_key())
-            );
-            assert_eq!(
-                1134,
-                vs.approximate_offset(&v, LookupKey::new("fab".as_bytes(), 9000).internal_key())
-            );
-        }
-        // The following tests reuse the same version set and verify that various compactions work
-        // like they should.
-        {
-            time_test!("compaction tests");
-            // compact level 0 with a partial range.
-            let from = LookupKey::new("000".as_bytes(), 1000);
-            let to = LookupKey::new("ab".as_bytes(), 1010);
-            let c = vs
-                .compact_range(0, from.internal_key(), to.internal_key())
-                .unwrap();
-            assert_eq!(2, c.inputs[0].len());
-            assert_eq!(1, c.inputs[1].len());
-            assert_eq!(1, c.grandparents.unwrap().len());
-
-            // compact level 0, but entire range of keys in version.
-            let from = LookupKey::new("000".as_bytes(), 1000);
-            let to = LookupKey::new("zzz".as_bytes(), 1010);
-            let c = vs
-                .compact_range(0, from.internal_key(), to.internal_key())
-                .unwrap();
-            assert_eq!(2, c.inputs[0].len());
-            assert_eq!(1, c.inputs[1].len());
-            assert_eq!(1, c.grandparents.as_ref().unwrap().len());
-            iterator_properties(
-                vs.make_input_iterator(&c),
-                12,
-                Rc::new(Box::new(vs.cmp.clone())),
-            );
-
-            // Expand input range on higher level.
-            let from = LookupKey::new("dab".as_bytes(), 1000);
-            let to = LookupKey::new("eab".as_bytes(), 1010);
-            let c = vs
-                .compact_range(1, from.internal_key(), to.internal_key())
-                .unwrap();
-            assert_eq!(3, c.inputs[0].len());
-            assert_eq!(1, c.inputs[1].len());
-            assert_eq!(0, c.grandparents.as_ref().unwrap().len());
-            iterator_properties(
-                vs.make_input_iterator(&c),
-                12,
-                Rc::new(Box::new(vs.cmp.clone())),
-            );
-
-            // is_trivial_move
-            let from = LookupKey::new("fab".as_bytes(), 1000);
-            let to = LookupKey::new("fba".as_bytes(), 1010);
-            let mut c = vs
-                .compact_range(2, from.internal_key(), to.internal_key())
-                .unwrap();
-            // pretend it's not manual
-            c.manual = false;
-            assert!(c.is_trivial_move());
-
-            // should_stop_before
-            let from = LookupKey::new("000".as_bytes(), 1000);
-            let to = LookupKey::new("zzz".as_bytes(), 1010);
-            let mid = LookupKey::new("abc".as_bytes(), 1010);
-            let mut c = vs
-                .compact_range(0, from.internal_key(), to.internal_key())
-                .unwrap();
-            assert!(!c.should_stop_before(from.internal_key()));
-            assert!(!c.should_stop_before(mid.internal_key()));
-            assert!(!c.should_stop_before(to.internal_key()));
-
-            // is_base_level_for
-            let from = LookupKey::new("000".as_bytes(), 1000);
-            let to = LookupKey::new("zzz".as_bytes(), 1010);
-            let mut c = vs
-                .compact_range(0, from.internal_key(), to.internal_key())
-                .unwrap();
-            assert!(c.is_base_level_for("aaa".as_bytes()));
-            assert!(!c.is_base_level_for("hac".as_bytes()));
-
-            // input/add_input_deletions
-            let from = LookupKey::new("000".as_bytes(), 1000);
-            let to = LookupKey::new("zzz".as_bytes(), 1010);
-            let mut c = vs
-                .compact_range(0, from.internal_key(), to.internal_key())
-                .unwrap();
-            for inp in &[(0, 0, 1), (0, 1, 2), (1, 0, 3)] {
-                let f = &c.inputs[inp.0][inp.1];
-                assert_eq!(inp.2, f.borrow().num);
-            }
-            c.add_input_deletions();
-            assert_eq!(23, c.edit().encode().len())
-        }
-    }
 }

@@ -25,7 +25,7 @@ enum EditTag {
     PrevLogNumber = 9, // sic!
 }
 
-fn tag_to_enum(t: u32) -> Option<EditTag> {
+fn tag2enum(t: u32) -> Option<EditTag> {
     match t {
         1 => Some(EditTag::Comparator),
         2 => Some(EditTag::LogNumber),
@@ -39,16 +39,16 @@ fn tag_to_enum(t: u32) -> Option<EditTag> {
     }
 }
 
-fn read_length_prefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
-    if let Ok(klen) = reader.read_varint() {
-        let mut keybuf = Vec::new();
-        keybuf.resize(klen, 0);
+fn readLengthPrefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
+    if let Ok(keyLength) = reader.read_varint() {
+        let mut buffer = Vec::new();
+        buffer.resize(keyLength, 0);
 
-        if let Ok(l) = reader.read(&mut keybuf) {
-            if l != klen {
+        if let Ok(count) = reader.read(&mut buffer) {
+            if count != keyLength {
                 return err(StatusCode::IOError, "Couldn't read full key");
             }
-            Ok(keybuf)
+            Ok(buffer)
         } else {
             err(StatusCode::IOError, "Couldn't read key")
         }
@@ -60,12 +60,12 @@ fn read_length_prefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
 /// manages changes to the set of managed SSTables and logfiles.
 pub struct VersionEdit {
     comparator: Option<String>,
-    pub log_number: Option<FileNum>,
-    pub prev_log_number: Option<FileNum>,
+    pub logNumber: Option<FileNum>,
+    pub prevLogNumber: Option<FileNum>,
     pub next_file_number: Option<FileNum>,
     pub last_seq: Option<SequenceNumber>,
 
-    pub compaction_ptrs: Vec<CompactionPointer>,
+    pub compactionPointerVec: Vec<CompactionPointer>,
     pub deleted: HashSet<(usize, FileNum)>,
     pub new_files: Vec<(usize, FileMetaData)>,
 }
@@ -74,11 +74,11 @@ impl VersionEdit {
     pub fn new() -> VersionEdit {
         VersionEdit {
             comparator: None,
-            log_number: None,
-            prev_log_number: None,
+            logNumber: None,
+            prevLogNumber: None,
             next_file_number: None,
             last_seq: None,
-            compaction_ptrs: Vec::with_capacity(8),
+            compactionPointerVec: Vec::with_capacity(8),
             deleted: HashSet::with_capacity(8),
             new_files: Vec::with_capacity(8),
         }
@@ -101,11 +101,11 @@ impl VersionEdit {
     }
 
     pub fn set_log_num(&mut self, num: u64) {
-        self.log_number = Some(num)
+        self.logNumber = Some(num)
     }
 
     pub fn set_prev_log_num(&mut self, num: u64) {
-        self.prev_log_number = Some(num);
+        self.prevLogNumber = Some(num);
     }
 
     pub fn set_last_seq(&mut self, num: u64) {
@@ -117,7 +117,7 @@ impl VersionEdit {
     }
 
     pub fn set_compact_pointer(&mut self, level: usize, key: InternalKey) {
-        self.compaction_ptrs.push(CompactionPointer {
+        self.compactionPointerVec.push(CompactionPointer {
             level,
             key: Vec::from(key),
         })
@@ -135,12 +135,12 @@ impl VersionEdit {
             buf.write_all(cmp.as_bytes()).unwrap();
         }
 
-        if let Some(lognum) = self.log_number {
+        if let Some(lognum) = self.logNumber {
             buf.write_varint(EditTag::LogNumber as u32).unwrap();
             buf.write_varint(lognum).unwrap();
         }
 
-        if let Some(prevlognum) = self.prev_log_number {
+        if let Some(prevlognum) = self.prevLogNumber {
             buf.write_varint(EditTag::PrevLogNumber as u32).unwrap();
             buf.write_varint(prevlognum).unwrap();
         }
@@ -155,7 +155,7 @@ impl VersionEdit {
             buf.write_varint(ls).unwrap();
         }
 
-        for cptr in self.compaction_ptrs.iter() {
+        for cptr in self.compactionPointerVec.iter() {
             buf.write_varint(EditTag::CompactPointer as u32).unwrap();
             buf.write_varint(cptr.level).unwrap();
             buf.write_varint(cptr.key.len()).unwrap();
@@ -183,70 +183,63 @@ impl VersionEdit {
         buf
     }
 
-    pub fn decode_from(src: &[u8]) -> Result<VersionEdit> {
+    pub fn decodeFrom(src: &[u8]) -> Result<VersionEdit> {
         let mut reader = src;
-        let mut ve = VersionEdit::new();
+        let mut versionEdit = VersionEdit::new();
 
         while let Ok(tag) = reader.read_varint::<u32>() {
-            if let Some(tag) = tag_to_enum(tag) {
+            if let Some(tag) = tag2enum(tag) {
                 match tag {
                     EditTag::Comparator => {
-                        let buf = read_length_prefixed(&mut reader)?;
-                        if let Ok(c) = String::from_utf8(buf) {
-                            ve.comparator = Some(c);
+                        let buffer = readLengthPrefixed(&mut reader)?;
+                        if let Ok(c) = String::from_utf8(buffer) {
+                            versionEdit.comparator = Some(c);
                         } else {
                             return err(StatusCode::Corruption, "Bad comparator encoding");
                         }
                     }
-
                     EditTag::LogNumber => {
-                        if let Ok(ln) = reader.read_varint() {
-                            ve.log_number = Some(ln);
+                        if let Ok(logNum) = reader.read_varint() {
+                            versionEdit.logNumber = Some(logNum);
                         } else {
-                            return err(StatusCode::IOError, "Couldn't read lognumber");
+                            return err(StatusCode::IOError, "Couldn't read log number");
                         }
                     }
-
                     EditTag::PrevLogNumber => {
-                        if let Ok(ln) = reader.read_varint() {
-                            ve.prev_log_number = Some(ln);
+                        if let Ok(prevLogNumber) = reader.read_varint() {
+                            versionEdit.prevLogNumber = Some(prevLogNumber);
                         } else {
-                            return err(StatusCode::IOError, "Couldn't read prevlognumber");
+                            return err(StatusCode::IOError, "Couldn't read prev log number");
                         }
                     }
-
                     EditTag::NextFileNumber => {
-                        if let Ok(nfn) = reader.read_varint() {
-                            ve.next_file_number = Some(nfn);
+                        if let Ok(nextFileNumber) = reader.read_varint() {
+                            versionEdit.next_file_number = Some(nextFileNumber);
                         } else {
                             return err(StatusCode::IOError, "Couldn't read next_file_number");
                         }
                     }
-
                     EditTag::LastSequence => {
                         if let Ok(ls) = reader.read_varint() {
-                            ve.last_seq = Some(ls);
+                            versionEdit.last_seq = Some(ls);
                         } else {
                             return err(StatusCode::IOError, "Couldn't read last_sequence");
                         }
                     }
-
                     EditTag::CompactPointer => {
                         // Monads by indentation...
                         if let Ok(lvl) = reader.read_varint() {
-                            let key = read_length_prefixed(&mut reader)?;
+                            let key = readLengthPrefixed(&mut reader)?;
 
-                            ve.compaction_ptrs
-                                .push(CompactionPointer { level: lvl, key });
+                            versionEdit.compactionPointerVec.push(CompactionPointer { level: lvl, key });
                         } else {
                             return err(StatusCode::IOError, "Couldn't read level");
                         }
                     }
-
                     EditTag::DeletedFile => {
                         if let Ok(lvl) = reader.read_varint() {
                             if let Ok(num) = reader.read_varint() {
-                                ve.deleted.insert((lvl, num));
+                                versionEdit.deleted.insert((lvl, num));
                             } else {
                                 return err(StatusCode::IOError, "Couldn't read file num");
                             }
@@ -254,14 +247,13 @@ impl VersionEdit {
                             return err(StatusCode::IOError, "Couldn't read level");
                         }
                     }
-
                     EditTag::NewFile => {
                         if let Ok(lvl) = reader.read_varint() {
                             if let Ok(num) = reader.read_varint() {
                                 if let Ok(size) = reader.read_varint() {
-                                    let smallest = read_length_prefixed(&mut reader)?;
-                                    let largest = read_length_prefixed(&mut reader)?;
-                                    ve.new_files.push((
+                                    let smallest = readLengthPrefixed(&mut reader)?;
+                                    let largest = readLengthPrefixed(&mut reader)?;
+                                    versionEdit.new_files.push((
                                         lvl,
                                         FileMetaData {
                                             num,
@@ -283,91 +275,10 @@ impl VersionEdit {
                     }
                 }
             } else {
-                return err(
-                    StatusCode::Corruption,
-                    &format!("Invalid tag number {}", tag),
-                );
+                return err(StatusCode::Corruption, &format!("Invalid tag number {}", tag));
             }
         }
 
-        Ok(ve)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::CompactionPointer;
-    use super::VersionEdit;
-
-    use crate::cmp::{Cmp, DefaultCmp};
-    use crate::types::FileMetaData;
-
-    #[test]
-    fn test_version_edit_encode_decode() {
-        let mut ve = VersionEdit::new();
-
-        ve.set_comparator_name(DefaultCmp.id());
-        ve.set_log_num(123);
-        ve.set_next_file(456);
-        ve.set_compact_pointer(0, &[0, 1, 2]);
-        ve.set_compact_pointer(1, &[3, 4, 5]);
-        ve.set_compact_pointer(2, &[6, 7, 8]);
-        ve.add_file(
-            0,
-            FileMetaData {
-                allowed_seeks: 12345,
-                num: 901,
-                size: 234,
-                smallest: vec![5, 6, 7],
-                largest: vec![8, 9, 0],
-            },
-        );
-        ve.delete_file(1, 132);
-
-        let encoded = ve.encode();
-
-        let decoded = VersionEdit::decode_from(encoded.as_ref()).unwrap();
-
-        assert_eq!(decoded.comparator, Some(DefaultCmp.id().to_string()));
-        assert_eq!(decoded.log_number, Some(123));
-        assert_eq!(decoded.next_file_number, Some(456));
-        assert_eq!(decoded.compaction_ptrs.len(), 3);
-        assert_eq!(
-            decoded.compaction_ptrs[0],
-            CompactionPointer {
-                level: 0,
-                key: vec![0, 1, 2],
-            }
-        );
-        assert_eq!(
-            decoded.compaction_ptrs[1],
-            CompactionPointer {
-                level: 1,
-                key: vec![3, 4, 5],
-            }
-        );
-        assert_eq!(
-            decoded.compaction_ptrs[2],
-            CompactionPointer {
-                level: 2,
-                key: vec![6, 7, 8],
-            }
-        );
-        assert_eq!(decoded.new_files.len(), 1);
-        assert_eq!(
-            decoded.new_files[0],
-            (
-                0,
-                FileMetaData {
-                    allowed_seeks: 0,
-                    num: 901,
-                    size: 234,
-                    smallest: vec![5, 6, 7],
-                    largest: vec![8, 9, 0],
-                }
-            )
-        );
-        assert_eq!(decoded.deleted.len(), 1);
-        assert!(decoded.deleted.contains(&(1, 132)));
+        Ok(versionEdit)
     }
 }

@@ -3,9 +3,7 @@ use std::time;
 
 pub fn micros() -> u64 {
     loop {
-        let now = time::SystemTime::now().duration_since(time::UNIX_EPOCH);
-
-        match now {
+        match time::SystemTime::now().duration_since(time::UNIX_EPOCH) {
             Err(_) => continue,
             Ok(dur) => return dur.as_secs() * 1000000 + dur.subsec_micros() as u64,
         }

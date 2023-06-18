@@ -1,6 +1,6 @@
 # leveldb-rs
 
-[![crates.io](https://img.shields.io/crates/v/rusty-leveldb.svg)](https://crates.io/crates/rusty-leveldb)
+[![crates.io](https://img.shields.io/crates/_v/rusty-leveldb.svg)](https://crates.io/crates/rusty-leveldb)
 [![Travis
 CI](https://api.travis-ci.org/dermesser/leveldb-rs.svg?branch=master)](https://travis-ci.org/dermesser/leveldb-rs)
 

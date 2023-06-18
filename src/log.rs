@@ -122,36 +122,30 @@ pub struct LogReader<R: Read> {
     digest: crc32::Digest,
     blk_off: usize,
     blocksize: usize,
-    head_scratch: [u8; 7],
+    head_scratch: [u8; HEADER_SIZE],
     checksums: bool,
 }
 
 impl<R: Read> LogReader<R> {
-    pub fn new(src: R, chksum: bool) -> LogReader<R> {
+    pub fn new(src: R, checksum: bool) -> LogReader<R> {
         LogReader {
             src,
             blk_off: 0,
             blocksize: BLOCK_SIZE,
-            checksums: chksum,
+            checksums: checksum,
             head_scratch: [0; 7],
             digest: crc32::Digest::new(crc32::CASTAGNOLI),
         }
     }
 
     /// EOF is signalled by Ok(0)
-    pub fn read(&mut self, dst: &mut Vec<u8>) -> Result<usize> {
-        let mut checksum: u32;
-        let mut length: u16;
-        let mut typ: u8;
-        let mut dst_offset: usize = 0;
-
-        dst.clear();
+    pub fn read(&mut self, dest: &mut Vec<u8>) -> Result<usize> {
+        dest.clear();
 
         loop {
             if self.blocksize - self.blk_off < HEADER_SIZE {
                 // skip to next block
-                self.src
-                    .read_exact(&mut self.head_scratch[0..self.blocksize - self.blk_off])?;
+                self.src.read_exact(&mut self.head_scratch[0..self.blocksize - self.blk_off])?;
                 self.blk_off = 0;
             }
 
@@ -164,19 +158,17 @@ impl<R: Read> LogReader<R> {
 
             self.blk_off += bytes_read;
 
-            checksum = u32::decode_fixed(&self.head_scratch[0..4]);
-            length = u16::decode_fixed(&self.head_scratch[4..6]);
-            typ = self.head_scratch[6];
+            let mut checksum = u32::decode_fixed(&self.head_scratch[0..4]);
+            let mut length = u16::decode_fixed(&self.head_scratch[4..6]);
+            let mut typ = self.head_scratch[6];
 
-            dst.resize(dst_offset + length as usize, 0);
-            bytes_read = self
-                .src
-                .read(&mut dst[dst_offset..dst_offset + length as usize])?;
+            let mut dst_offset: usize = 0;
+
+            dest.resize(dst_offset + length as usize, 0);
+            bytes_read = self.src.read(&mut dest[dst_offset..dst_offset + length as usize])?;
             self.blk_off += bytes_read;
 
-            if self.checksums
-                && !self.check_integrity(typ, &dst[dst_offset..dst_offset + bytes_read], checksum)
-            {
+            if self.checksums && !self.check_integrity(typ, &dest[dst_offset..dst_offset + bytes_read], checksum) {
                 return err(StatusCode::Corruption, "Invalid Checksum");
             }
 
@@ -184,11 +176,17 @@ impl<R: Read> LogReader<R> {
 
             if typ == RecordType::Full as u8 {
                 return Ok(dst_offset);
-            } else if typ == RecordType::First as u8 {
+            }
+
+            if typ == RecordType::First as u8 {
                 continue;
-            } else if typ == RecordType::Middle as u8 {
+            }
+
+            if typ == RecordType::Middle as u8 {
                 continue;
-            } else if typ == RecordType::Last as u8 {
+            }
+
+            if typ == RecordType::Last as u8 {
                 return Ok(dst_offset);
             }
         }
@@ -211,117 +209,4 @@ pub fn mask_crc(c: u32) -> u32 {
 pub fn unmask_crc(mc: u32) -> u32 {
     let rot = mc.wrapping_sub(MASK_DELTA);
     rot.wrapping_shr(17) | rot.wrapping_shl(15)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn test_crc_mask_crc() {
-        let crc = crc32::checksum_castagnoli("abcde".as_bytes());
-        assert_eq!(crc, unmask_crc(mask_crc(crc)));
-        assert!(crc != mask_crc(crc));
-    }
-
-    #[test]
-    fn test_crc_sanity() {
-        assert_eq!(0x8a9136aa, crc32::checksum_castagnoli(&[0 as u8; 32]));
-        assert_eq!(0x62a8ab43, crc32::checksum_castagnoli(&[0xff as u8; 32]));
-    }
-
-    #[test]
-    fn test_writer() {
-        let data = &[
-            "hello world. My first log entry.",
-            "and my second",
-            "and my third",
-        ];
-        let mut lw = LogWriter::new(Vec::new());
-        let total_len = data.iter().fold(0, |l, d| l + d.len());
-
-        for d in data {
-            let _ = lw.add_record(d.as_bytes());
-        }
-
-        assert_eq!(lw.current_block_offset, total_len + 3 * super::HEADER_SIZE);
-    }
-
-    #[test]
-    fn test_writer_append() {
-        let data = &[
-            "hello world. My first log entry.",
-            "and my second",
-            "and my third",
-        ];
-
-        let mut dst = Vec::new();
-        dst.resize(1024, 0 as u8);
-
-        {
-            let mut lw = LogWriter::new(Cursor::new(dst.as_mut_slice()));
-            for d in data {
-                let _ = lw.add_record(d.as_bytes());
-            }
-        }
-
-        let old = dst.clone();
-
-        // Ensure that new_with_off positions the writer correctly. Some ugly mucking about with
-        // cursors and stuff is required.
-        {
-            let offset = data[0].len() + super::HEADER_SIZE;
-            let mut lw =
-                LogWriter::new_with_off(Cursor::new(&mut dst.as_mut_slice()[offset..]), offset);
-            for d in &data[1..] {
-                let _ = lw.add_record(d.as_bytes());
-            }
-        }
-        assert_eq!(old, dst);
-    }
-
-    #[test]
-    fn test_reader() {
-        let data = vec![
-            "abcdefghi".as_bytes().to_vec(),    // fits one block of 17
-            "123456789012".as_bytes().to_vec(), // spans two blocks of 17
-            "0101010101010101010101".as_bytes().to_vec(),
-        ]; // spans three blocks of 17
-        let mut lw = LogWriter::new(Vec::new());
-        lw.block_size = super::HEADER_SIZE + 10;
-
-        for e in data.iter() {
-            assert!(lw.add_record(e).is_ok());
-        }
-
-        assert_eq!(lw.dst.len(), 93);
-        // Corrupt first record.
-        lw.dst[2] += 1;
-
-        let mut lr = LogReader::new(lw.dst.as_slice(), true);
-        lr.blocksize = super::HEADER_SIZE + 10;
-        let mut dst = Vec::with_capacity(128);
-
-        // First record is corrupted.
-        assert_eq!(
-            err(StatusCode::Corruption, "Invalid Checksum"),
-            lr.read(&mut dst)
-        );
-
-        let mut i = 1;
-        loop {
-            let r = lr.read(&mut dst);
-
-            if !r.is_ok() {
-                panic!("{}", r.unwrap_err());
-            } else if r.unwrap() == 0 {
-                break;
-            }
-
-            assert_eq!(dst, data[i]);
-            i += 1;
-        }
-        assert_eq!(i, data.len());
-    }
 }

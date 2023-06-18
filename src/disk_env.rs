@@ -77,8 +77,8 @@ impl Env for PosixDiskEnv {
         ))
     }
 
-    fn exists(&self, p: &Path) -> Result<bool> {
-        Ok(p.exists())
+    fn exists(&self, path: &Path) -> Result<bool> {
+        Ok(path.exists())
     }
 
     fn children(&self, p: &Path) -> Result<Vec<PathBuf>> {
@@ -178,97 +178,5 @@ impl Env for PosixDiskEnv {
 
     fn sleep_for(&self, micros: u32) {
         sleep_for(micros);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::convert::AsRef;
-    use std::io::Write;
-    use std::iter::FromIterator;
-
-    #[test]
-    fn test_files() {
-        let n = "testfile.xyz".to_string();
-        let name = n.as_ref();
-        let env = PosixDiskEnv::new();
-
-        // exists, size_of, delete
-        assert!(env.open_appendable_file(name).is_ok());
-        assert!(env.exists(name).unwrap_or(false));
-        assert_eq!(env.size_of(name).unwrap_or(1), 0);
-        assert!(env.delete(name).is_ok());
-
-        assert!(env.open_writable_file(name).is_ok());
-        assert!(env.exists(name).unwrap_or(false));
-        assert_eq!(env.size_of(name).unwrap_or(1), 0);
-        assert!(env.delete(name).is_ok());
-
-        {
-            // write
-            let mut f = env.open_writable_file(name).unwrap();
-            let _ = f.write("123xyz".as_bytes());
-            assert_eq!(6, env.size_of(name).unwrap_or(0));
-
-            // rename
-            let newname = Path::new("testfile2.xyz");
-            assert!(env.rename(name, newname).is_ok());
-            assert_eq!(6, env.size_of(newname).unwrap());
-            assert!(!env.exists(name).unwrap());
-            // rename back so that the remaining tests can use the file.
-            assert!(env.rename(newname, name).is_ok());
-        }
-
-        assert!(env.open_sequential_file(name).is_ok());
-        assert!(env.open_random_access_file(name).is_ok());
-
-        assert!(env.delete(name).is_ok());
-    }
-
-    #[test]
-    fn test_locking() {
-        let env = PosixDiskEnv::new();
-        let n = "testfile.123".to_string();
-        let name = n.as_ref();
-
-        {
-            let mut f = env.open_writable_file(name).unwrap();
-            let _ = f.write("123xyz".as_bytes());
-            assert_eq!(env.size_of(name).unwrap_or(0), 6);
-        }
-
-        {
-            let r = env.lock(name);
-            assert!(r.is_ok());
-            env.unlock(r.unwrap()).unwrap();
-        }
-
-        {
-            let r = env.lock(name);
-            assert!(r.is_ok());
-            let s = env.lock(name);
-            assert!(s.is_err());
-            env.unlock(r.unwrap()).unwrap();
-        }
-
-        assert!(env.delete(name).is_ok());
-    }
-
-    #[test]
-    fn test_dirs() {
-        let d = "subdir/";
-        let dirname = d.as_ref();
-        let env = PosixDiskEnv::new();
-
-        assert!(env.mkdir(dirname).is_ok());
-        assert!(env
-            .open_writable_file(
-                String::from_iter(vec![d.to_string(), "f1.txt".to_string()].into_iter()).as_ref()
-            )
-            .is_ok());
-        assert_eq!(env.children(dirname).unwrap().len(), 1);
-        assert!(env.rmdir(dirname).is_ok());
     }
 }

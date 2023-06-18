@@ -13,7 +13,7 @@ fn main() {
         let mut options = Options::default();
         options.compression_type = rusty_leveldb::CompressionType::CompressionSnappy;
 
-        let mut db = DB::open("stresstestdb", options).unwrap();
+        let mut db = DB::open("stress_test", options).unwrap();
 
         write(&mut db, N);
         entries += N;
@@ -31,23 +31,22 @@ fn gen_string(n: usize) -> String {
 }
 
 fn write(db: &mut DB, n: usize) {
-    time_test::time_test!("write");
+
 
     for _ in 0..n {
         db.put(gen_string(KEY_LEN).as_bytes(), gen_string(VAL_LEN).as_bytes()).unwrap();
     }
 
-    time_test::time_test!("write-flush");
     db.flush().unwrap();
 }
 
 fn read(db: &mut DB, n: usize) -> usize {
     let mut succ = 0;
     time_test::time_test!("read");
-    for i in 0..n {
+    for _ in 0..n {
         let k = gen_string(KEY_LEN);
 
-        if let Some(v) = db.get(k.as_bytes()) {
+        if let Some(_) = db.get(k.as_bytes()) {
             succ += 1;
         }
     }

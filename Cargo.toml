@@ -15,9 +15,9 @@ include = ["src/**/*", "src/*", "Cargo.toml", "LICENSE", "README.md"]
 [dependencies]
 crc = "1.8"
 integer-encoding = "3.0"
-rand = "0.7"
+rand = "0.8.1"
 snap = "1.0"
-errno = "0.2"
+errno = "0.3"
 fs2 = "0.4.3"
 
 tokio = { optional = true, features = ["rt", "sync"], version = ">= 1.21" }
