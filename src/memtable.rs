@@ -15,7 +15,6 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    /// Returns a new MemTable.
     /// This wraps opt.cmp inside a MemtableKey-specific comparator.
     pub fn new(cmp: Rc<Box<dyn Cmp>>) -> MemTable {
         MemTable::new_raw(Rc::new(Box::new(MemtableKeyCmp(cmp))))

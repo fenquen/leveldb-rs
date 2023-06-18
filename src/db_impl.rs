@@ -116,18 +116,18 @@ impl DB {
         let name = name.as_ref();
         let mut db = DB::new(name, options);
         let mut versionEdit = VersionEdit::new();
-        let save_manifest = db.recover(&mut versionEdit)?;
+        let saveManifest = db.recover(&mut versionEdit)?;
 
         // Create log file if an old one is not being reused.
         if db.log.is_none() {
             let lognum = db.versionSet.borrow_mut().new_file_number();
-            let logfile = db.options.env.open_writable_file(Path::new(&log_file_name(&db.name, lognum)))?;
+            let logfile = db.options.env.open_writable_file(Path::new(&getLogFilePath(&db.name, lognum)))?;
             versionEdit.set_log_num(lognum);
             db.log = Some(LogWriter::new(BufWriter::new(logfile)));
             db.log_num = Some(lognum);
         }
 
-        if save_manifest {
+        if saveManifest {
             versionEdit.set_log_num(db.log_num.unwrap_or(0));
             db.versionSet.borrow_mut().log_and_apply(versionEdit)?;
         }
@@ -158,18 +158,19 @@ impl DB {
     /// recover recovers from the existing state on disk. If the wrapped result is `true`, then
     /// log_and_apply() should be called after recovery has finished.
     fn recover(&mut self, versionEdit: &mut VersionEdit) -> Result<bool> {
-        if self.options.error_if_exists && self.options.env.exists(&self.path.as_ref()).unwrap_or(false) {
+        if self.options.errorIfExists && self.options.env.exists(&self.path.as_ref()).unwrap_or(false) {
             return err(StatusCode::AlreadyExists, "database already exists");
         }
 
         let _ = self.options.env.mkdir(Path::new(&self.path));
+
         self.acquire_lock()?;
 
         if let Err(e) = readCurrentFile(&self.options.env, &self.path) {
             if e.code == StatusCode::NotFound && self.options.createIfMissing {
                 self.initialize_db()?;
             } else {
-                return err(StatusCode::InvalidArgument, "database does not exist and create_if_missing is false", );
+                return err(StatusCode::InvalidArgument, "database does not exist and create_if_missing is false");
             }
         }
 
@@ -196,12 +197,14 @@ impl DB {
                 Err(e) => return Err(e.annotate(format!("While parsing {:?}", file))),
             }
         }
+
         if !expected.is_empty() {
             log!(self.options.log, "Missing at least these files: {:?}", expected);
             return err(StatusCode::Corruption, "missing live files (see log)");
         }
 
         log_files.sort();
+
         for i in 0..log_files.len() {
             let (save_manifest_, max_seq_) =
                 self.recover_log_file(log_files[i], i == log_files.len() - 1, versionEdit)?;
@@ -230,7 +233,7 @@ impl DB {
         is_last: bool,
         ve: &mut VersionEdit,
     ) -> Result<(bool, SequenceNumber)> {
-        let filename = log_file_name(&self.path, log_num);
+        let filename = getLogFilePath(&self.path, log_num);
         let logfile = self.options.env.open_sequential_file(Path::new(&filename))?;
         // Use the user-supplied comparator; it will be wrapped inside a MemtableKeyCmp.
         let cmp: Rc<Box<dyn Cmp>> = self.options.cmp.clone();
@@ -341,18 +344,14 @@ impl DB {
         Ok(())
     }
 
-    /// acquire_lock acquires the lock file.
     fn acquire_lock(&mut self) -> Result<()> {
-        let lock_r = self.options.env.lock(Path::new(&lock_file_name(&self.path)));
-        match lock_r {
+        match self.options.env.lock(Path::new(&getLockFilePath(&self.path))) {
             Ok(lockfile) => {
                 self.lock = Some(lockfile);
                 Ok(())
             }
-            Err(ref e) if e.code == StatusCode::LockError => err(
-                StatusCode::LockError,
-                "database lock is held by another instance",
-            ),
+            Err(ref e)if e.code == StatusCode::LockError =>
+                err(StatusCode::LockError, "database lock is held by another instance"),
             Err(e) => Err(e),
         }
     }
@@ -572,7 +571,7 @@ impl DB {
             let logf = self
                 .options
                 .env
-                .open_writable_file(Path::new(&log_file_name(&self.path, logn)));
+                .open_writable_file(Path::new(&getLogFilePath(&self.path, logn)));
             if logf.is_err() {
                 self.versionSet.borrow_mut().reuse_file_number(logn);
                 Err(logf.err().unwrap())
@@ -1050,12 +1049,12 @@ pub fn build_table<I: LdbIterator, P: AsRef<Path>>(
     Ok(md)
 }
 
-fn log_file_name(db: &Path, num: FileNum) -> PathBuf {
-    db.join(format!("{:06}.log", num))
+fn getLogFilePath(databasePath: &Path, num: FileNum) -> PathBuf {
+    databasePath.join(format!("{:06}.log", num))
 }
 
-fn lock_file_name(db: &Path) -> PathBuf {
-    db.join("LOCK")
+fn getLockFilePath(databasePath: &Path) -> PathBuf {
+    databasePath.join("LOCK")
 }
 
 /// open_info_log opens an info log file in the given database. It transparently returns a

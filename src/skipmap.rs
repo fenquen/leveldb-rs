@@ -320,19 +320,6 @@ impl LdbIterator for SkipMapIter {
         }
         r
     }
-    fn reset(&mut self) {
-        self.current = self.map.borrow().head.as_ref();
-    }
-    fn seek(&mut self, key: &[u8]) {
-        if let Some(node) = self.map.borrow().get_greater_or_equal(key) {
-            self.current = node as *const Node;
-            return;
-        }
-        self.reset();
-    }
-    fn valid(&self) -> bool {
-        self.current != self.map.borrow().head.as_ref()
-    }
     fn current(&self, key: &mut Vec<u8>, val: &mut Vec<u8>) -> bool {
         if self.valid() {
             key.clear();
@@ -345,6 +332,19 @@ impl LdbIterator for SkipMapIter {
         } else {
             false
         }
+    }
+    fn seek(&mut self, key: &[u8]) {
+        if let Some(node) = self.map.borrow().get_greater_or_equal(key) {
+            self.current = node as *const Node;
+            return;
+        }
+        self.reset();
+    }
+    fn reset(&mut self) {
+        self.current = self.map.borrow().head.as_ref();
+    }
+    fn valid(&self) -> bool {
+        self.current != self.map.borrow().head.as_ref()
     }
     fn prev(&mut self) -> bool {
         // Going after the original implementation here; we just seek to the node before current().

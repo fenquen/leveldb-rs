@@ -13,6 +13,8 @@ use integer_encoding::FixedInt;
 use integer_encoding::FixedIntWriter;
 
 const BLOCK_SIZE: usize = 32 * 1024;
+
+/// checkSum(4) + length(2) + type(1)
 const HEADER_SIZE: usize = 4 + 2 + 1;
 
 #[derive(Clone, Copy)]
@@ -120,9 +122,9 @@ pub struct LogReader<R: Read> {
     // TODO: Wrap src in a buffer to enhance read performance.
     src: R,
     digest: crc32::Digest,
-    blk_off: usize,
-    blocksize: usize,
-    head_scratch: [u8; HEADER_SIZE],
+    blockOffset: usize,
+    blockSize: usize,
+    headScratch: [u8; HEADER_SIZE],
     checksums: bool,
 }
 
@@ -130,64 +132,65 @@ impl<R: Read> LogReader<R> {
     pub fn new(src: R, checksum: bool) -> LogReader<R> {
         LogReader {
             src,
-            blk_off: 0,
-            blocksize: BLOCK_SIZE,
+            blockOffset: 0,
+            blockSize: BLOCK_SIZE,
             checksums: checksum,
-            head_scratch: [0; 7],
+            headScratch: [0; HEADER_SIZE],
             digest: crc32::Digest::new(crc32::CASTAGNOLI),
         }
     }
 
-    /// EOF is signalled by Ok(0)
     pub fn read(&mut self, dest: &mut Vec<u8>) -> Result<usize> {
         dest.clear();
 
         loop {
-            if self.blocksize - self.blk_off < HEADER_SIZE {
-                // skip to next block
-                self.src.read_exact(&mut self.head_scratch[0..self.blocksize - self.blk_off])?;
-                self.blk_off = 0;
+            // skip to next block
+            if self.blockSize - self.blockOffset < HEADER_SIZE {
+                self.src.read_exact(&mut self.headScratch[0..self.blockSize - self.blockOffset])?;
+                self.blockOffset = 0;
             }
 
-            let mut bytes_read = self.src.read(&mut self.head_scratch)?;
+            let mut readCount = self.src.read(&mut self.headScratch)?;
 
-            // EOF
-            if bytes_read == 0 {
+            // EOF is signalled by Ok(0)
+            if readCount == 0 {
                 return Ok(0);
             }
 
-            self.blk_off += bytes_read;
+            self.blockOffset += readCount;
 
-            let mut checksum = u32::decode_fixed(&self.head_scratch[0..4]);
-            let mut length = u16::decode_fixed(&self.head_scratch[4..6]);
-            let mut typ = self.head_scratch[6];
+            let mut checksum = u32::decode_fixed(&self.headScratch[0..4]);
+            let mut length = u16::decode_fixed(&self.headScratch[4..6]);
+            let mut type_ = self.headScratch[6];
 
-            let mut dst_offset: usize = 0;
+            // dest当前的位置
+            let mut destOffset: usize = 0;
 
-            dest.resize(dst_offset + length as usize, 0);
-            bytes_read = self.src.read(&mut dest[dst_offset..dst_offset + length as usize])?;
-            self.blk_off += bytes_read;
+            dest.resize(destOffset + length as usize, 0);
+            readCount = self.src.read(&mut dest[destOffset..destOffset + length as usize])?;
+            self.blockOffset += readCount;
 
-            if self.checksums && !self.check_integrity(typ, &dest[dst_offset..dst_offset + bytes_read], checksum) {
+            // 校验
+            if self.checksums && !self.check_integrity(type_, &dest[destOffset..destOffset + readCount], checksum) {
                 return err(StatusCode::Corruption, "Invalid Checksum");
             }
 
-            dst_offset += length as usize;
+            destOffset += length as usize;
 
-            if typ == RecordType::Full as u8 {
-                return Ok(dst_offset);
+            if type_ == RecordType::Full as u8 {
+                return Ok(destOffset);
             }
 
-            if typ == RecordType::First as u8 {
+            if type_ == RecordType::First as u8 {
                 continue;
             }
 
-            if typ == RecordType::Middle as u8 {
+            if type_ == RecordType::Middle as u8 {
                 continue;
             }
 
-            if typ == RecordType::Last as u8 {
-                return Ok(dst_offset);
+            if type_ == RecordType::Last as u8 {
+                return Ok(destOffset);
             }
         }
     }

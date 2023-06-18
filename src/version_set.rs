@@ -190,8 +190,8 @@ impl VersionSet {
         VersionSet {
             dbname: dbName.as_ref().to_owned(),
             cmp: InternalKeyCmp(options.cmp.clone()),
-            options:options.clone(),
-            tableCache:tableCache.clone(),
+            options: options.clone(),
+            tableCache: tableCache.clone(),
 
             next_file_num: 2,
             manifest_num: 0,
@@ -327,12 +327,10 @@ impl VersionSet {
         Some(c)
     }
 
-    pub fn compact_range<'a, 'b>(
-        &mut self,
-        level: usize,
-        from: InternalKey<'a>,
-        to: InternalKey<'b>,
-    ) -> Option<Compaction> {
+    pub fn compact_range(&mut self,
+                         level: usize,
+                         from: InternalKey,
+                         to: InternalKey, ) -> Option<Compaction> {
         assert!(self.currentVersion.is_some());
         let mut inputs = self
             .currentVersion

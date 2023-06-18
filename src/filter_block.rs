@@ -156,7 +156,6 @@ impl FilterBlockReader {
         assert!(filter_begin < filter_end);
         assert!(filter_end <= self.offsets_offset);
 
-        self.policy
-            .key_may_match(key, &self.block[filter_begin..filter_end])
+        self.policy.key_may_match(key, &self.block[filter_begin..filter_end])
     }
 }

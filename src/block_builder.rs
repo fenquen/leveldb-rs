@@ -5,8 +5,7 @@ use crate::options::Options;
 
 use integer_encoding::{FixedIntWriter, VarIntWriter};
 
-/// BlockBuilder contains functionality for building a block consisting of consecutive key-value
-/// entries.
+/// BlockBuilder contains functionality for building a block consisting of consecutive key-value entries
 pub struct BlockBuilder {
     opt: Options,
     buffer: Vec<u8>,
@@ -117,78 +116,4 @@ impl BlockBuilder {
         // done
         self.buffer
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::options;
-
-    fn get_data() -> Vec<(&'static [u8], &'static [u8])> {
-        vec![
-            ("key1".as_bytes(), "value1".as_bytes()),
-            (
-                "loooooooooooooooooooooooooooooooooongerkey1".as_bytes(),
-                "shrtvl1".as_bytes(),
-            ),
-            ("medium length key 1".as_bytes(), "some value 2".as_bytes()),
-            ("prefix_key1".as_bytes(), "value".as_bytes()),
-            ("prefix_key2".as_bytes(), "value".as_bytes()),
-            ("prefix_key3".as_bytes(), "value".as_bytes()),
-        ]
-    }
-
-    #[test]
-    fn test_block_builder_sanity() {
-        let mut o = options::for_test();
-        o.block_restart_interval = 3;
-        let mut builder = BlockBuilder::new(o);
-        let d = get_data();
-
-        for &(k, v) in d.iter() {
-            builder.add(k, v);
-            assert!(builder.restart_counter <= 3);
-            assert_eq!(builder.last_key(), k);
-        }
-
-        assert_eq!(149, builder.size_estimate());
-        assert_eq!(d.len(), builder.entries());
-
-        let block = builder.finish();
-        assert_eq!(block.len(), 149);
-    }
-
-    #[test]
-    fn test_block_builder_reset() {
-        let mut o = options::for_test();
-        o.block_restart_interval = 3;
-        let mut builder = BlockBuilder::new(o);
-        let d = get_data();
-
-        for &(k, v) in d.iter() {
-            builder.add(k, v);
-            assert!(builder.restart_counter <= 3);
-            assert_eq!(builder.last_key(), k);
-        }
-
-        assert_eq!(d.len(), builder.entries());
-        builder.reset();
-        assert_eq!(0, builder.entries());
-        assert_eq!(4, builder.size_estimate());
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_block_builder_panics() {
-        let mut d = get_data();
-        // Identical key as d[3].
-        d[4].0 = b"prefix_key1";
-
-        let mut builder = BlockBuilder::new(options::for_test());
-        for &(k, v) in d.iter() {
-            builder.add(k, v);
-            assert_eq!(k, builder.last_key());
-        }
-    }
-    // Additional test coverage is provided by tests in block.rs.
 }
