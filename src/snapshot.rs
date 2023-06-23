@@ -76,8 +76,7 @@ impl SnapshotList {
         }
     }
 
-    /// oldest returns the lowest sequence number of all snapshots. It returns 0 if no snapshots
-    /// are present.
+    /// oldest returns the lowest sequence number of all snapshots. It returns 0 if no snapshots are present
     pub fn oldest(&self) -> SequenceNumber {
         let oldest = self
             .inner
