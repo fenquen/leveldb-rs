@@ -82,6 +82,7 @@ impl AsyncDB {
             }),
         }
     }
+
     pub async fn delete(&self, key: Vec<u8>) -> Result<()> {
         let r = self.process_request(Request::Delete { key }).await?;
         match r {

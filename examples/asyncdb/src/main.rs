@@ -31,7 +31,7 @@ async fn main() {
         r3,
         Err(Status {
             code: StatusCode::AsyncError,
-            err: "Unknown snapshot reference: this is a bug".to_string()
+            err: "Unknown snapshot reference: this is a bug".to_string(),
         })
     );
 

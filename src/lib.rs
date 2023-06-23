@@ -76,7 +76,7 @@ mod db_iter;
 #[cfg(feature = "async")]
 pub use asyncdb::AsyncDB;
 
-pub use cmp::{Cmp, DefaultCmp};
+pub use cmp::{Comparator, DefaultCmp};
 pub use db_impl::DB;
 pub use db_iter::DBIterator;
 pub use disk_env::PosixDiskEnv;

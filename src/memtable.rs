@@ -1,4 +1,4 @@
-use crate::cmp::{Cmp, MemtableKeyCmp};
+use crate::cmp::{Comparator, MemtableKeyCmp};
 use crate::key_types::{build_memtable_key, parse_internal_key, parse_memtable_key, ValueType};
 use crate::key_types::{LookupKey, UserKey};
 use crate::skipmap::{SkipMap, SkipMapIter};
@@ -15,13 +15,13 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    /// This wraps opt.cmp inside a MemtableKey-specific comparator.
-    pub fn new(cmp: Rc<Box<dyn Cmp>>) -> MemTable {
+    /// This wraps opt.cmp inside a MemtableKey-specific Comparator.
+    pub fn new(cmp: Rc<Box<dyn Comparator>>) -> MemTable {
         MemTable::new_raw(Rc::new(Box::new(MemtableKeyCmp(cmp))))
     }
 
-    /// Doesn't wrap the comparator in a MemtableKeyCmp.
-    fn new_raw(cmp: Rc<Box<dyn Cmp>>) -> MemTable {
+    /// Doesn't wrap the Comparator in a MemtableKeyCmp.
+    fn new_raw(cmp: Rc<Box<dyn Comparator>>) -> MemTable {
         MemTable {
             map: SkipMap::new(cmp),
         }

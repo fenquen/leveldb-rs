@@ -5,7 +5,7 @@
 
 use crate::db_iter::DBIterator;
 
-use crate::cmp::{Cmp, InternalKeyCmp};
+use crate::cmp::{Comparator, InternalKeyCmp};
 use crate::env::{Env, FileLock};
 use crate::error::{err, Result, StatusCode};
 use crate::filter::{BoxedFilterPolicy, InternalFilterPolicy};
@@ -25,7 +25,7 @@ use crate::types::{
 use crate::version::Version;
 use crate::version_edit::VersionEdit;
 use crate::version_set::{
-    manifest_file_name, readCurrentFile, set_current_file, Compaction, VersionSet,
+    getManifestFilePath, readCurrentFile, setCurrentFile, Compaction, VersionSet,
 };
 use crate::write_batch::WriteBatch;
 
@@ -47,7 +47,7 @@ pub struct DB {
 
     lock: Option<FileLock>,
 
-    internal_cmp: Rc<Box<dyn Cmp>>,
+    internal_cmp: Rc<Box<dyn Comparator>>,
     fpol: InternalFilterPolicy<BoxedFilterPolicy>,
     options: Options,
 
@@ -86,10 +86,10 @@ impl DB {
             name: name.to_owned(),
             path,
             lock: None,
-            internal_cmp: Rc::new(Box::new(InternalKeyCmp(options.cmp.clone()))),
+            internal_cmp: Rc::new(Box::new(InternalKeyCmp(options.comparator.clone()))),
             fpol: InternalFilterPolicy::new(options.filter_policy.clone()),
 
-            memTable: MemTable::new(options.cmp.clone()),
+            memTable: MemTable::new(options.comparator.clone()),
             immutableMemTable: None,
 
             options,
@@ -120,39 +120,21 @@ impl DB {
 
         // Create log file if an old one is not being reused.
         if db.log.is_none() {
-            let lognum = db.versionSet.borrow_mut().new_file_number();
-            let logfile = db.options.env.open_writable_file(Path::new(&getLogFilePath(&db.name, lognum)))?;
-            versionEdit.set_log_num(lognum);
+            let logNumber = db.versionSet.borrow_mut().new_file_number();
+            let logfile = db.options.env.open_writable_file(Path::new(&getLogFilePath(&db.name, logNumber)))?;
+            versionEdit.logNumber = Some(logNumber);
             db.log = Some(LogWriter::new(BufWriter::new(logfile)));
-            db.log_num = Some(lognum);
+            db.log_num = Some(logNumber);
         }
 
         if saveManifest {
-            versionEdit.set_log_num(db.log_num.unwrap_or(0));
+            versionEdit.logNumber = Some(db.log_num.unwrap_or(0));
             db.versionSet.borrow_mut().log_and_apply(versionEdit)?;
         }
 
         db.delete_obsolete_files()?;
         db.maybe_do_compaction()?;
         Ok(db)
-    }
-
-    /// initialize_db initializes a new database.
-    fn initialize_db(&mut self) -> Result<()> {
-        let mut ve = VersionEdit::new();
-        ve.set_comparator_name(self.options.cmp.id());
-        ve.set_log_num(0);
-        ve.set_next_file(2);
-        ve.set_last_seq(0);
-
-        {
-            let manifest = manifest_file_name(&self.path, 1);
-            let manifest_file = self.options.env.open_writable_file(Path::new(&manifest))?;
-            let mut lw = LogWriter::new(manifest_file);
-            lw.add_record(&ve.encode())?;
-            lw.flush()?;
-        }
-        set_current_file(&self.options.env, &self.path, 1)
     }
 
     /// recover recovers from the existing state on disk. If the wrapped result is `true`, then
@@ -164,11 +146,11 @@ impl DB {
 
         let _ = self.options.env.mkdir(Path::new(&self.path));
 
-        self.acquire_lock()?;
+        self.acquireLock()?;
 
         if let Err(e) = readCurrentFile(&self.options.env, &self.path) {
             if e.code == StatusCode::NotFound && self.options.createIfMissing {
-                self.initialize_db()?;
+                self.initializeDb()?;
             } else {
                 return err(StatusCode::InvalidArgument, "database does not exist and create_if_missing is false");
             }
@@ -179,18 +161,15 @@ impl DB {
 
         // Recover from all log files not in the descriptor.
         let mut max_seq = 0;
-        let filenames = self.options.env.children(&self.path)?;
+        let fileNamesInDatabaseDir = self.options.env.children(&self.path)?;
         let mut expected = self.versionSet.borrow().live_files();
         let mut log_files = vec![];
 
-        for file in &filenames {
+        for file in &fileNamesInDatabaseDir {
             match parse_file_name(&file) {
                 Ok((num, typ)) => {
                     expected.remove(&num);
-                    if typ == FileType::Log
-                        && (num >= self.versionSet.borrow().log_num
-                        || num == self.versionSet.borrow().prev_log_num)
-                    {
+                    if typ == FileType::Log && (num >= self.versionSet.borrow().logNumber || num == self.versionSet.borrow().prev_log_num) {
                         log_files.push(num);
                     }
                 }
@@ -214,7 +193,7 @@ impl DB {
             if max_seq_ > max_seq {
                 max_seq = max_seq_;
             }
-            self.versionSet.borrow_mut().mark_file_number_used(log_files[i]);
+            self.versionSet.borrow_mut().markFileNumberUsed(log_files[i]);
         }
 
         if self.versionSet.borrow().last_seq < max_seq {
@@ -222,6 +201,24 @@ impl DB {
         }
 
         Ok(save_manifest)
+    }
+
+    fn initializeDb(&mut self) -> Result<()> {
+        let mut versionEdit = VersionEdit::new();
+        versionEdit.comparatorName = Some(self.options.comparator.name().to_string());
+        versionEdit.logNumber = Some(0);
+        versionEdit.nextFileNumber = Some(2);
+        versionEdit.lastSequenceNumber = Some(0);
+
+        {
+            let manifestFilePath = getManifestFilePath(&self.path, 1);
+            let manifestFile = self.options.env.open_writable_file(Path::new(&manifestFilePath))?;
+            let mut logWriter = LogWriter::new(manifestFile);
+            logWriter.addRecord(&versionEdit.encode())?;
+            logWriter.flush()?;
+        }
+
+        setCurrentFile(&self.options.env, &self.path, 1)
     }
 
     /// recover_log_file reads a single log file into a memtable, writing new L0 tables if
@@ -235,13 +232,11 @@ impl DB {
     ) -> Result<(bool, SequenceNumber)> {
         let filename = getLogFilePath(&self.path, log_num);
         let logfile = self.options.env.open_sequential_file(Path::new(&filename))?;
-        // Use the user-supplied comparator; it will be wrapped inside a MemtableKeyCmp.
-        let cmp: Rc<Box<dyn Cmp>> = self.options.cmp.clone();
+        // Use the user-supplied Comparator; it will be wrapped inside a MemtableKeyCmp.
+        let cmp: Rc<Box<dyn Comparator>> = self.options.comparator.clone();
 
-        let mut logreader = LogReader::new(
-            logfile, // checksum=
-            true,
-        );
+        let mut logreader = LogReader::new(logfile, true, );
+
         log!(self.options.log, "Recovering log file {:?}", filename);
         let mut scratch = vec![];
         let mut mem = MemTable::new(cmp.clone());
@@ -307,7 +302,7 @@ impl DB {
             if let Ok((num, typ)) = parse_file_name(&name) {
                 match typ {
                     FileType::Log => {
-                        if num >= self.versionSet.borrow().log_num {
+                        if num >= self.versionSet.borrow().logNumber {
                             continue;
                         }
                     }
@@ -344,7 +339,7 @@ impl DB {
         Ok(())
     }
 
-    fn acquire_lock(&mut self) -> Result<()> {
+    fn acquireLock(&mut self) -> Result<()> {
         match self.options.env.lock(Path::new(&getLockFilePath(&self.path))) {
             Ok(lockfile) => {
                 self.lock = Some(lockfile);
@@ -374,14 +369,12 @@ impl DB {
 }
 
 impl DB {
-    // WRITE //
-
     /// Adds a single entry. It's a short, non-synchronous, form of `write()`; in order to make
     /// sure that the written entry is on disk, call `flush()` afterwards.
     pub fn put(&mut self, k: &[u8], v: &[u8]) -> Result<()> {
-        let mut wb = WriteBatch::new();
-        wb.put(k, v);
-        self.write(wb, false)
+        let mut writeBatch = WriteBatch::new();
+        writeBatch.put(k, v);
+        self.write(writeBatch, false)
     }
 
     /// Deletes a single entry. Like with `put()`, you can call `flush()` to guarantee that
@@ -392,23 +385,22 @@ impl DB {
         self.write(wb, false)
     }
 
-    /// Writes an entire WriteBatch. `sync` determines whether the write should be flushed to
-    /// disk.
-    pub fn write(&mut self, batch: WriteBatch, sync: bool) -> Result<()> {
+    /// Writes an entire WriteBatch. `sync` determines whether the write should be flushed to disk.
+    pub fn write(&mut self, writeBatch: WriteBatch, sync: bool) -> Result<()> {
         assert!(self.log.is_some());
 
         self.make_room_for_write(false)?;
 
-        let entries = batch.count() as u64;
+        let count = writeBatch.count() as u64;
         let log = self.log.as_mut().unwrap();
         let next = self.versionSet.borrow().last_seq + 1;
 
-        batch.insert_into_memtable(next, &mut self.memTable);
-        log.add_record(&batch.encode(next))?;
+        writeBatch.insert_into_memtable(next, &mut self.memTable);
+        log.addRecord(&writeBatch.encode(next))?;
         if sync {
             log.flush()?;
         }
-        self.versionSet.borrow_mut().last_seq += entries;
+        self.versionSet.borrow_mut().last_seq += count;
         Ok(())
     }
 
@@ -498,7 +490,7 @@ impl DB {
     /// new_iter_at returns a DBIterator at the supplied snapshot.
     pub fn new_iter_at(&mut self, ss: Snapshot) -> Result<DBIterator> {
         Ok(DBIterator::new(
-            self.options.cmp.clone(),
+            self.options.comparator.clone(),
             self.versionSet.clone(),
             self.merge_iterators()?,
             ss,
@@ -579,7 +571,7 @@ impl DB {
                 self.log = Some(LogWriter::new(BufWriter::new(logf.unwrap())));
                 self.log_num = Some(logn);
 
-                let mut imm = MemTable::new(self.options.cmp.clone());
+                let mut imm = MemTable::new(self.options.comparator.clone());
                 mem::swap(&mut imm, &mut self.memTable);
                 self.immutableMemTable = Some(imm);
                 self.maybe_do_compaction()
@@ -713,7 +705,7 @@ impl DB {
             self.immutableMemTable = Some(imm);
             return Err(e);
         }
-        ve.set_log_num(self.log_num.unwrap_or(0));
+        ve.logNumber = Some(self.log_num.unwrap_or(0));
         self.versionSet.borrow_mut().log_and_apply(ve)?;
         if let Err(e) = self.delete_obsolete_files() {
             log!(self.options.log, "Error deleting obsolete files: {}", e);
@@ -816,7 +808,7 @@ impl DB {
                 continue;
             }
 
-            if !have_ukey || self.options.cmp.cmp(ukey, &current_ukey) != Ordering::Equal {
+            if !have_ukey || self.options.comparator.compare(ukey, &current_ukey) != Ordering::Equal {
                 // First occurrence of this key.
                 current_ukey.clear();
                 current_ukey.extend_from_slice(ukey);

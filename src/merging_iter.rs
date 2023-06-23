@@ -1,4 +1,4 @@
-use crate::cmp::Cmp;
+use crate::cmp::Comparator;
 use crate::types::{current_key_val, Direction, LdbIterator};
 
 use std::cmp::Ordering;
@@ -20,12 +20,12 @@ pub struct MergingIter {
     iters: Vec<Box<dyn LdbIterator>>,
     current: Option<usize>,
     direction: Direction,
-    cmp: Rc<Box<dyn Cmp>>,
+    cmp: Rc<Box<dyn Comparator>>,
 }
 
 impl MergingIter {
     /// Construct a new merging iterator.
-    pub fn new(cmp: Rc<Box<dyn Cmp>>, iters: Vec<Box<dyn LdbIterator>>) -> MergingIter {
+    pub fn new(cmp: Rc<Box<dyn Comparator>>, iters: Vec<Box<dyn LdbIterator>>) -> MergingIter {
         MergingIter {
             iters,
             current: None,
@@ -68,7 +68,7 @@ impl MergingIter {
                                 // keys. However, in reality, two entries will always have differing
                                 // sequence numbers.
                                 if self.iters[i].current(&mut keybuf, &mut valbuf)
-                                    && self.cmp.cmp(&keybuf, &key) == Ordering::Equal
+                                    && self.cmp.compare(&keybuf, &key) == Ordering::Equal
                                 {
                                     self.iters[i].advance();
                                 }
@@ -122,7 +122,7 @@ impl MergingIter {
         for i in 1..self.iters.len() {
             if self.iters[i].current(&mut current, &mut valscratch) {
                 if self.iters[next_ix].current(&mut smallest, &mut valscratch) {
-                    if self.cmp.cmp(&current, &smallest) == ord {
+                    if self.cmp.compare(&current, &smallest) == ord {
                         next_ix = i;
                     }
                 } else {

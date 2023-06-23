@@ -26,10 +26,10 @@ impl PosixDiskEnv {
 }
 
 ///  annotates an io::Error with information about the operation and the file.
-fn map_err_with_name(methodName: &'static str, f: &Path, e: io::Error) -> Status {
-    let mut s = Status::from(e);
-    s.err = format!("{}: {}: {}", methodName, s.err, path_to_str(f));
-    s
+fn err2Status(methodName: &'static str, path: &Path, error: io::Error) -> Status {
+    let mut status = Status::from(error);
+    status.err = format!("{}: {}: {}", methodName, status.err, path_to_str(path));
+    status
 }
 
 // Note: We're using Ok(f()?) in several locations below in order to benefit from the automatic
@@ -40,7 +40,7 @@ impl Env for PosixDiskEnv {
             fs::OpenOptions::new()
                 .read(true)
                 .open(path)
-                .map_err(|e| map_err_with_name("open (seq)", path, e))?,
+                .map_err(|e| err2Status("open (seq)", path, e))?,
         ))
     }
 
@@ -48,11 +48,8 @@ impl Env for PosixDiskEnv {
         Ok(fs::OpenOptions::new()
             .read(true)
             .open(path)
-            .map(|f| {
-                let b: Box<dyn RandomAccess> = Box::new(f);
-                b
-            })
-            .map_err(|e| map_err_with_name("open (randomaccess)", path, e))?)
+            .map(|f| { Box::new(f) as Box<dyn RandomAccess> })
+            .map_err(|e| err2Status("open (random access)", path, e))?)
     }
 
     fn open_writable_file(&self, path: &Path) -> Result<Box<dyn Write>> {
@@ -62,7 +59,7 @@ impl Env for PosixDiskEnv {
                 .write(true)
                 .append(false)
                 .open(path)
-                .map_err(|e| map_err_with_name("open (write)", path, e))?,
+                .map_err(|e| err2Status("open (write)", path, e))?,
         ))
     }
 
@@ -73,7 +70,7 @@ impl Env for PosixDiskEnv {
                 .write(true)
                 .append(true)
                 .open(path)
-                .map_err(|e| map_err_with_name("open (append)", path, e))?,
+                .map_err(|e| err2Status("open (append)", path, e))?,
         ))
     }
 
@@ -82,7 +79,7 @@ impl Env for PosixDiskEnv {
     }
 
     fn children(&self, p: &Path) -> Result<Vec<PathBuf>> {
-        let dir_reader = fs::read_dir(p).map_err(|e| map_err_with_name("children", p, e))?;
+        let dir_reader = fs::read_dir(p).map_err(|e| err2Status("children", p, e))?;
         let filenames = dir_reader
             .map(|r| match r {
                 Ok(_) => {
@@ -96,72 +93,64 @@ impl Env for PosixDiskEnv {
     }
 
     fn size_of(&self, p: &Path) -> Result<usize> {
-        let meta = fs::metadata(p).map_err(|e| map_err_with_name("size_of", p, e))?;
+        let meta = fs::metadata(p).map_err(|e| err2Status("size_of", p, e))?;
         Ok(meta.len() as usize)
     }
 
     fn delete(&self, p: &Path) -> Result<()> {
-        Ok(fs::remove_file(p).map_err(|e| map_err_with_name("delete", p, e))?)
+        Ok(fs::remove_file(p).map_err(|e| err2Status("delete", p, e))?)
     }
 
     fn mkdir(&self, p: &Path) -> Result<()> {
-        Ok(fs::create_dir_all(p).map_err(|e| map_err_with_name("mkdir", p, e))?)
+        Ok(fs::create_dir_all(p).map_err(|e| err2Status("mkdir", p, e))?)
     }
 
     fn rmdir(&self, p: &Path) -> Result<()> {
-        Ok(fs::remove_dir_all(p).map_err(|e| map_err_with_name("rmdir", p, e))?)
+        Ok(fs::remove_dir_all(p).map_err(|e| err2Status("rmdir", p, e))?)
     }
 
     fn rename(&self, old: &Path, new: &Path) -> Result<()> {
-        Ok(fs::rename(old, new).map_err(|e| map_err_with_name("rename", old, e))?)
+        Ok(fs::rename(old, new).map_err(|e| err2Status("rename", old, e))?)
     }
 
-    fn lock(&self, p: &Path) -> Result<FileLock> {
+    fn lock(&self, path: &Path) -> Result<FileLock> {
         let mut locks = self.locks.lock().unwrap();
 
-        if locks.contains_key(&p.to_str().unwrap().to_string()) {
-            Err(Status::new(StatusCode::AlreadyExists, "Lock is held"))
-        } else {
-            let f = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(p)
-                .map_err(|e| map_err_with_name("lock", p, e))?;
-
-            match f.try_lock_exclusive() {
-                Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                    return Err(Status::new(
-                        StatusCode::LockError,
-                        "lock on database is already held by different process",
-                    ));
-                }
-                Err(_) => {
-                    return Err(Status::new(
-                        StatusCode::Errno(errno::errno()),
-                        &format!("unknown lock error on file {:?} (file {})", f, p.display()),
-                    ));
-                }
-                _ => (),
-            };
-
-            locks.insert(p.to_str().unwrap().to_string(), f);
-            let lock = FileLock {
-                id: p.to_str().unwrap().to_string(),
-            };
-            Ok(lock)
+        if locks.contains_key(&path.to_str().unwrap().to_string()) {
+            return Err(Status::new(StatusCode::AlreadyExists, "Lock is held"));
         }
+
+        let f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(path)
+            .map_err(|e| err2Status("lock", path, e))?;
+
+        match f.try_lock_exclusive() {
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                return Err(Status::new(StatusCode::LockError, "lock on database is already held by different process"));
+            }
+            Err(_) => {
+                return Err(Status::new(StatusCode::Errno(errno::errno()), &format!("unknown lock error on file {:?} (file {})", f, path.display())));
+            }
+            _ => (),
+        };
+
+        locks.insert(path.to_str().unwrap().to_string(), f);
+
+        Ok(FileLock{path: path: path.to_str().unwrap().to_string()})
     }
     fn unlock(&self, l: FileLock) -> Result<()> {
         let mut locks = self.locks.lock().unwrap();
-        if !locks.contains_key(&l.id) {
+        if !locks.contains_key(&l.path) {
             err(
                 StatusCode::LockError,
-                &format!("unlocking a file that is not locked: {}", l.id),
+                &format!("unlocking a file that is not locked: {}", l.path),
             )
         } else {
-            let f = locks.remove(&l.id).unwrap();
+            let f = locks.remove(&l.path).unwrap();
             if f.unlock().is_err() {
-                return err(StatusCode::LockError, &format!("unlock failed: {}", l.id));
+                return err(StatusCode::LockError, &format!("unlock failed: {}", l.path));
             }
             Ok(())
         }

@@ -4,12 +4,11 @@ use crate::types;
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-type WrappedCmp = Rc<Box<dyn Cmp>>;
+type WrappedCmp = Rc<Box<dyn Comparator>>;
 
-/// Comparator trait, supporting types that can be nested (i.e., add additional functionality on top of an inner comparator)
-pub trait Cmp {
+pub trait Comparator {
     /// Compare to byte strings, bytewise.
-    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering;
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering;
 
     /// Return the shortest byte string that compares "Greater" to the first argument and "Less" to the second one.
     fn find_shortest_sep(&self, from: &[u8], to: &[u8]) -> Vec<u8>;
@@ -17,17 +16,17 @@ pub trait Cmp {
     /// Return the shortest byte string that compares "Greater" to the argument.
     fn find_short_succ(&self, key: &[u8]) -> Vec<u8>;
 
-    /// A unique identifier for a comparator. A comparator wrapper (like InternalKeyCmp) may
-    /// return the id of its inner comparator.
-    fn id(&self) -> &'static str;
+    /// A unique identifier for a Comparator. A Comparator wrapper (like InternalKeyCmp) may
+    /// return the id of its inner Comparator.
+    fn name(&self) -> &'static str;
 }
 
-/// The default byte-wise comparator.
+/// The default byte-wise Comparator.
 #[derive(Clone)]
 pub struct DefaultCmp;
 
-impl Cmp for DefaultCmp {
-    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+impl Comparator for DefaultCmp {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         a.cmp(b)
     }
 
@@ -49,7 +48,7 @@ impl Cmp for DefaultCmp {
             if diff < 0xff && diff + 1 < b[diff_at] {
                 let mut sep = Vec::from(&a[0..diff_at + 1]);
                 sep[diff_at] += 1;
-                assert!(self.cmp(&sep, b) == Ordering::Less);
+                assert!(self.compare(&sep, b) == Ordering::Less);
                 return sep;
             }
 
@@ -67,7 +66,7 @@ impl Cmp for DefaultCmp {
         }
         if sep[i] < 0xff {
             sep[i] += 1;
-            if self.cmp(&sep, b) == Ordering::Less {
+            if self.compare(&sep, b) == Ordering::Less {
                 return sep;
             } else {
                 sep[i] -= 1;
@@ -97,22 +96,22 @@ impl Cmp for DefaultCmp {
         result
     }
 
-    fn id(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         "leveldb.BytewiseComparator"
     }
 }
 
 /// Same as memtable_key_cmp, but for InternalKeys.
 #[derive(Clone)]
-pub struct InternalKeyCmp(pub Rc<Box<dyn Cmp>>);
+pub struct InternalKeyCmp(pub Rc<Box<dyn Comparator>>);
 
-impl Cmp for InternalKeyCmp {
-    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+impl Comparator for InternalKeyCmp {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         key_types::cmp_internal_key(self.0.as_ref().as_ref(), a, b)
     }
 
-    fn id(&self) -> &'static str {
-        self.0.id()
+    fn name(&self) -> &'static str {
+        self.0.name()
     }
 
     fn find_shortest_sep(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
@@ -125,7 +124,7 @@ impl Cmp for InternalKeyCmp {
 
         let sep: Vec<u8> = self.0.find_shortest_sep(keya, keyb);
 
-        if sep.len() < keya.len() && self.0.cmp(keya, &sep) == Ordering::Less {
+        if sep.len() < keya.len() && self.0.compare(keya, &sep) == Ordering::Less {
             return LookupKey::new(&sep, types::MAX_SEQUENCE_NUMBER)
                 .internal_key()
                 .to_vec();
@@ -141,22 +140,22 @@ impl Cmp for InternalKeyCmp {
 }
 
 impl InternalKeyCmp {
-    /// cmp_inner compares a and b using the underlying comparator (the "user comparator").
+    /// cmp_inner compares a and b using the underlying Comparator (the "user Comparator").
     pub fn cmp_inner(&self, a: &[u8], b: &[u8]) -> Ordering {
-        self.0.cmp(a, b)
+        self.0.compare(a, b)
     }
 }
 
-/// An internal comparator wrapping a user-supplied comparator. This comparator is used to compare
+/// An internal Comparator wrapping a user-supplied Comparator. This Comparator is used to compare
 /// memtable keys, which contain length prefixes and a sequence number.
-/// The ordering is determined by asking the wrapped comparator; ties are broken by *reverse*
+/// The ordering is determined by asking the wrapped Comparator; ties are broken by *reverse*
 /// ordering the sequence numbers. (This means that when having an entry abx/4 and seRching for
 /// abx/5, then abx/4 is counted as "greater-or-equal", making snapshot functionality work at all)
 #[derive(Clone)]
-pub struct MemtableKeyCmp(pub Rc<Box<dyn Cmp>>);
+pub struct MemtableKeyCmp(pub Rc<Box<dyn Comparator>>);
 
-impl Cmp for MemtableKeyCmp {
-    fn cmp(&self, a: &[u8], b: &[u8]) -> Ordering {
+impl Comparator for MemtableKeyCmp {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
         key_types::cmp_memtable_key(self.0.as_ref().as_ref(), a, b)
     }
 
@@ -170,7 +169,7 @@ impl Cmp for MemtableKeyCmp {
         panic!("find* functions are invalid on MemtableKeyCmp");
     }
 
-    fn id(&self) -> &'static str {
-        self.0.id()
+    fn name(&self) -> &'static str {
+        self.0.name()
     }
 }

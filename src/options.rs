@@ -1,6 +1,6 @@
 use crate::block::Block;
 use crate::cache::Cache;
-use crate::cmp::{Cmp, DefaultCmp};
+use crate::cmp::{Comparator, DefaultCmp};
 use crate::disk_env;
 use crate::env::Env;
 use crate::filter;
@@ -37,7 +37,7 @@ pub fn int_to_compressiontype(i: u32) -> Option<CompressionType> {
 /// self-explanatory; the defaults are defined in the `Default` implementation.
 #[derive(Clone)]
 pub struct Options {
-    pub cmp: Rc<Box<dyn Cmp>>,
+    pub comparator: Rc<Box<dyn Comparator>>,
     pub env: Rc<Box<dyn Env>>,
     pub log: Option<Shared<Logger>>,
     pub createIfMissing: bool,
@@ -60,7 +60,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Options {
         Options {
-            cmp: Rc::new(Box::new(DefaultCmp)),
+            comparator: Rc::new(Box::new(DefaultCmp)),
             env: Rc::new(Box::new(disk_env::PosixDiskEnv::new())),
             log: None,
             createIfMissing: true,

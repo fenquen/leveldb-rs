@@ -1,4 +1,4 @@
-use crate::cmp::{Cmp, InternalKeyCmp};
+use crate::cmp::{Comparator, InternalKeyCmp};
 use crate::env::Env;
 use crate::error::{err, Result, Status, StatusCode};
 use crate::key_types::{parse_internal_key, InternalKey, UserKey};
@@ -23,7 +23,7 @@ pub struct Compaction {
     max_file_size: usize,
     input_version: Option<Shared<Version>>,
     level_ixs: [usize; NUM_LEVELS],
-    cmp: Rc<Box<dyn Cmp>>,
+    cmp: Rc<Box<dyn Comparator>>,
     icmp: InternalKeyCmp,
 
     manual: bool,
@@ -39,15 +39,15 @@ pub struct Compaction {
 }
 
 impl Compaction {
-    // Note: opt.cmp should be the user-supplied or default comparator (not an InternalKeyCmp).
+    // Note: opt.cmp should be the user-supplied or default Comparator (not an InternalKeyCmp).
     pub fn new(opt: &Options, level: usize, input: Option<Shared<Version>>) -> Compaction {
         Compaction {
             level,
             max_file_size: opt.max_file_size,
             input_version: input,
             level_ixs: Default::default(),
-            cmp: opt.cmp.clone(),
-            icmp: InternalKeyCmp(opt.cmp.clone()),
+            cmp: opt.comparator.clone(),
+            icmp: InternalKeyCmp(opt.comparator.clone()),
             manual: false,
 
             inputs: Default::default(),
@@ -106,8 +106,8 @@ impl Compaction {
             let files = &inp_version.borrow().fileMetaHandleVecArr[level];
             while self.level_ixs[level] < files.len() {
                 let f = files[self.level_ixs[level]].borrow();
-                if self.cmp.cmp(k, parse_internal_key(&f.largest).2) <= Ordering::Equal {
-                    if self.cmp.cmp(k, parse_internal_key(&f.smallest).2) >= Ordering::Equal {
+                if self.cmp.compare(k, parse_internal_key(&f.largest).2) <= Ordering::Equal {
+                    if self.cmp.compare(k, parse_internal_key(&f.smallest).2) >= Ordering::Equal {
                         // key is in this file's range, so this is not the base level.
                         return false;
                     }
@@ -143,7 +143,7 @@ impl Compaction {
         while self.grandparent_ix < grandparents.len()
             && self
             .icmp
-            .cmp(k, &grandparents[self.grandparent_ix].borrow().largest)
+            .compare(k, &grandparents[self.grandparent_ix].borrow().largest)
             == Ordering::Greater
         {
             if self.seen_key {
@@ -173,7 +173,7 @@ pub struct VersionSet {
     pub next_file_num: u64,
     pub manifest_num: u64,
     pub last_seq: u64,
-    pub log_num: u64,
+    pub logNumber: u64,
     pub prev_log_num: u64,
 
     currentVersion: Option<Shared<Version>>,
@@ -189,17 +189,17 @@ impl VersionSet {
                                tableCache: Shared<TableCache>) -> VersionSet {
         VersionSet {
             dbname: dbName.as_ref().to_owned(),
-            cmp: InternalKeyCmp(options.cmp.clone()),
+            cmp: InternalKeyCmp(options.comparator.clone()),
             options: options.clone(),
             tableCache: tableCache.clone(),
 
             next_file_num: 2,
             manifest_num: 0,
             last_seq: 0,
-            log_num: 0,
+            logNumber: 0,
             prev_log_num: 0,
 
-            currentVersion: Some(share(Version::new(tableCache, options.cmp.clone()))),
+            currentVersion: Some(share(Version::new(tableCache, options.comparator.clone()))),
             compaction_ptrs: Default::default(),
             descriptor_log: None,
         }
@@ -243,7 +243,7 @@ impl VersionSet {
         }
     }
 
-    pub fn mark_file_number_used(&mut self, n: FileNum) {
+    pub fn markFileNumberUsed(&mut self, n: FileNum) {
         if self.next_file_num <= n {
             self.next_file_num = n + 1;
         }
@@ -261,9 +261,9 @@ impl VersionSet {
         let mut offset = 0;
         for level in 0..NUM_LEVELS {
             for f in &v.borrow().fileMetaHandleVecArr[level] {
-                if self.options.cmp.cmp(&f.borrow().largest, key) <= Ordering::Equal {
+                if self.options.comparator.compare(&f.borrow().largest, key) <= Ordering::Equal {
                     offset += f.borrow().size;
-                } else if self.options.cmp.cmp(&f.borrow().smallest, key) == Ordering::Greater {
+                } else if self.options.comparator.compare(&f.borrow().smallest, key) == Ordering::Greater {
                     // In higher levels, files are sorted; we don't need to search further.
                     if level > 0 {
                         break;
@@ -293,7 +293,7 @@ impl VersionSet {
                 if self.compaction_ptrs[level].is_empty()
                     || self
                     .cmp
-                    .cmp(&f.borrow().largest, &self.compaction_ptrs[level])
+                    .compare(&f.borrow().largest, &self.compaction_ptrs[level])
                     == Ordering::Greater
                 {
                     c.add_input(0, f.clone());
@@ -449,7 +449,7 @@ impl VersionSet {
         assert!(self.descriptor_log.is_some());
 
         let mut edit = VersionEdit::new();
-        edit.set_comparator_name(self.options.cmp.id());
+        edit.comparatorName = Some(self.options.comparator.name().to_string());
 
         // Save compaction pointers.
         for level in 0..NUM_LEVELS {
@@ -469,7 +469,7 @@ impl VersionSet {
         self.descriptor_log
             .as_mut()
             .unwrap()
-            .add_record(&edit.encode())
+            .addRecord(&edit.encode())
     }
 
     /// log_and_apply merges the given edit with the current state and generates a new version. It
@@ -478,18 +478,20 @@ impl VersionSet {
         assert!(self.currentVersion.is_some());
 
         if edit.logNumber.is_none() {
-            edit.set_log_num(self.log_num);
+            edit.logNumber = Some(self.logNumber);
         } else {
-            assert!(edit.logNumber.unwrap() >= self.log_num);
+            assert!(edit.logNumber.unwrap() >= self.logNumber);
             assert!(edit.logNumber.unwrap() < self.next_file_num);
         }
-        if edit.prevLogNumber.is_none() {
-            edit.set_prev_log_num(self.prev_log_num);
-        }
-        edit.set_next_file(self.next_file_num);
-        edit.set_last_seq(self.last_seq);
 
-        let mut v = Version::new(self.tableCache.clone(), self.options.cmp.clone());
+        if edit.prevLogNumber.is_none() {
+            edit.prevLogNumber = Some(self.prev_log_num);
+        }
+
+        edit.nextFileNumber = Some(self.next_file_num);
+        edit.lastSequenceNumber = Some(self.last_seq);
+
+        let mut v = Version::new(self.tableCache.clone(), self.options.comparator.clone());
         {
             let mut builder = Builder::new();
             builder.apply(&edit, &mut self.compaction_ptrs);
@@ -498,8 +500,8 @@ impl VersionSet {
         self.finalize(&mut v);
 
         if self.descriptor_log.is_none() {
-            let descname = manifest_file_name(&self.dbname, self.manifest_num);
-            edit.set_next_file(self.next_file_num);
+            let descname = getManifestFilePath(&self.dbname, self.manifest_num);
+            edit.nextFileNumber = Some(self.next_file_num);
             self.descriptor_log = Some(LogWriter::new(
                 self.options.env.open_writable_file(Path::new(&descname))?,
             ));
@@ -508,14 +510,14 @@ impl VersionSet {
 
         let encoded = edit.encode();
         if let Some(ref mut lw) = self.descriptor_log {
-            lw.add_record(&encoded)?;
+            lw.addRecord(&encoded)?;
             lw.flush()?;
         }
-        set_current_file(&self.options.env, &self.dbname, self.manifest_num)?;
+        setCurrentFile(&self.options.env, &self.dbname, self.manifest_num)?;
 
         self.add_version(v);
         // log_number was set above.
-        self.log_num = edit.logNumber.unwrap();
+        self.logNumber = edit.logNumber.unwrap();
 
         // TODO: Roll back written files if something went wrong.
         Ok(())
@@ -550,7 +552,7 @@ impl VersionSet {
         v.compaction_level = best_lvl;
     }
 
-    /// recover recovers the state of a LevelDB instance from the files on disk. If recover()
+    /// recovers the state of a LevelDB instance from the files on disk.
     /// returns true, the a manifest needs to be written eventually (using log_and_apply()).
     pub fn recover(&mut self) -> Result<bool> {
         assert!(self.currentVersion.is_some());
@@ -569,10 +571,10 @@ impl VersionSet {
 
             let mut logReader = LogReader::new(&mut manifestFile, true);
 
-            let mut log_number = None;
-            let mut prev_log_number = None;
-            let mut next_file_number = None;
-            let mut last_seq = None;
+            let mut logNumber = None;
+            let mut prevLogNumber = None;
+            let mut nextFileNumber = None;
+            let mut lastSequenceNumber = None;
 
             let mut buffer = Vec::new();
             while let Ok(size) = logReader.read(&mut buffer) {
@@ -584,60 +586,59 @@ impl VersionSet {
                 builder.apply(&versionEdit, &mut self.compaction_ptrs);
 
                 if let Some(ln) = versionEdit.logNumber {
-                    log_number = Some(ln);
+                    logNumber = Some(ln);
                 }
-                if let Some(nfn) = versionEdit.next_file_number {
-                    next_file_number = Some(nfn);
+                if let Some(nfn) = versionEdit.nextFileNumber {
+                    nextFileNumber = Some(nfn);
                 }
-                if let Some(ls) = versionEdit.last_seq {
-                    last_seq = Some(ls);
+                if let Some(ls) = versionEdit.lastSequenceNumber {
+                    lastSequenceNumber = Some(ls);
                 }
                 if let Some(pln) = versionEdit.prevLogNumber {
-                    prev_log_number = Some(pln);
+                    prevLogNumber = Some(pln);
                 }
             }
 
-            if let Some(ln) = log_number {
-                self.log_num = ln;
-                self.mark_file_number_used(ln);
+            if let Some(ln) = logNumber {
+                self.logNumber = ln;
+                self.markFileNumberUsed(ln);
             } else {
                 return err(StatusCode::Corruption, "no meta-lognumber entry in descriptor");
             }
 
-            if let Some(nfn) = next_file_number {
+            if let Some(nfn) = nextFileNumber {
                 self.next_file_num = nfn + 1;
             } else {
                 return err(StatusCode::Corruption, "no meta-next-file entry in descriptor");
             }
 
-            if let Some(ls) = last_seq {
+            if let Some(ls) = lastSequenceNumber {
                 self.last_seq = ls;
             } else {
                 return err(StatusCode::Corruption, "no last-sequence entry in descriptor");
             }
 
-            if let Some(pln) = prev_log_number {
+            if let Some(pln) = prevLogNumber {
                 self.prev_log_num = pln;
-                self.mark_file_number_used(prev_log_number.unwrap());
+                self.markFileNumberUsed(prevLogNumber.unwrap());
             } else {
                 self.prev_log_num = 0;
             }
         }
 
-        let mut v = Version::new(self.tableCache.clone(), self.options.cmp.clone());
+        let mut v = Version::new(self.tableCache.clone(), self.options.comparator.clone());
         builder.save_to(&self.cmp, self.currentVersion.as_ref().unwrap(), &mut v);
         self.finalize(&mut v);
         self.add_version(v);
         self.manifest_num = self.next_file_num - 1;
-        log!(
-            self.options.log,
-            "Recovered manifest with next_file={} manifest_num={} log_num={} prev_log_num={} last_seq={}",
+
+        log!(self.options.log,
+            "recovered manifest with next_file={} manifest_num={} log_num={} prev_log_num={} last_seq={}",
             self.next_file_num,
             self.manifest_num,
-            self.log_num,
+            self.logNumber,
             self.prev_log_num,
-            self.last_seq
-        );
+            self.last_seq);
 
         // A new manifest needs to be written only if we don't reuse the existing one.
         Ok(!self.reuse_manifest(&manifestFilePath, &manifestFileName))
@@ -647,8 +648,7 @@ impl VersionSet {
     fn reuse_manifest(&mut self,
                       current_manifest_path: &Path,
                       current_manifest_base: &Path, ) -> bool {
-        // Note: The original has only one option, reuse_logs; reuse_logs has to be set in order to
-        // reuse manifests.
+        // Note: The original has only one option, reuse_logs; reuse_logs has to be set in order to reuse manifests.
         // However, there's not much that stops us from reusing manifests without reusing logs or
         // vice versa. One issue exists though: If no write operations are done, empty log files
         // will accumulate every time a DB is opened, until at least one write happens (otherwise,
@@ -714,12 +714,12 @@ impl VersionSet {
                 iters.push(Box::new(new_version_iter(
                     c.inputs[i].clone(),
                     self.tableCache.clone(),
-                    self.options.cmp.clone(),
+                    self.options.comparator.clone(),
                 )));
             }
         }
         assert!(iters.len() <= cap);
-        let cmp: Rc<Box<dyn Cmp>> = Rc::new(Box::new(self.cmp.clone()));
+        let cmp: Rc<Box<dyn Comparator>> = Rc::new(Box::new(self.cmp.clone()));
         Box::new(MergingIter::new(cmp, iters))
     }
 }
@@ -764,23 +764,22 @@ impl Builder {
 
     /// maybe_add_file adds a file f at level to version v, if it's not already marked as deleted
     /// in this edit. It also asserts that the ordering of files is preserved.
-    fn maybe_add_file(
-        &mut self,
-        cmp: &InternalKeyCmp,
-        v: &mut Version,
-        level: usize,
-        f: FileMetaHandle,
-    ) {
+    fn maybe_add_file(&mut self,
+                      cmp: &InternalKeyCmp,
+                      v: &mut Version,
+                      level: usize,
+                      f: FileMetaHandle, ) {
         // Only add file if it's not already deleted.
         if self.deleted[level].iter().any(|d| *d == f.borrow().num) {
             return;
         }
+
         {
             let files = &v.fileMetaHandleVecArr[level];
             if level > 0 && !files.is_empty() {
                 // File must be after last file in level.
                 assert_eq!(
-                    cmp.cmp(
+                    cmp.compare(
                         &files[files.len() - 1].borrow().largest,
                         &f.borrow().smallest,
                     ),
@@ -788,11 +787,11 @@ impl Builder {
                 );
             }
         }
+
         v.fileMetaHandleVecArr[level].push(f);
     }
 
-    /// save_to saves the edits applied to the builder to v, adding all non-deleted files from
-    /// Version base to v.
+    /// saves the edits applied to the builder to v, adding all non-deleted files from Version base to v.
     fn save_to(&mut self, cmp: &InternalKeyCmp, base: &Shared<Version>, v: &mut Version) {
         for level in 0..NUM_LEVELS {
             sort_files_by_smallest(cmp, &mut self.added[level]);
@@ -806,7 +805,7 @@ impl Builder {
             let iadded = added.into_iter();
             let ibasefiles = basefiles.into_iter();
             let merged = merge_iters(iadded, ibasefiles, |a, b| {
-                cmp.cmp(&a.borrow().smallest, &b.borrow().smallest)
+                cmp.compare(&a.borrow().smallest, &b.borrow().smallest)
             });
             for m in merged {
                 self.maybe_add_file(cmp, v, level, m);
@@ -821,32 +820,32 @@ impl Builder {
                     &v.fileMetaHandleVecArr[level][i - 1].borrow().largest,
                     &v.fileMetaHandleVecArr[level][i].borrow().smallest,
                 );
-                assert!(cmp.cmp(prev_end, this_begin) < Ordering::Equal);
+                assert!(cmp.compare(prev_end, this_begin) < Ordering::Equal);
             }
         }
     }
 }
 
-fn manifest_name(file_num: FileNum) -> PathBuf {
+fn getManifestFileName(file_num: FileNum) -> PathBuf {
     Path::new(&format!("MANIFEST-{:06}", file_num)).to_owned()
 }
 
-pub fn manifest_file_name<P: AsRef<Path>>(dbname: P, file_num: FileNum) -> PathBuf {
-    dbname.as_ref().join(manifest_name(file_num))
+pub fn getManifestFilePath<P: AsRef<Path>>(databasePath: P, file_num: FileNum) -> PathBuf {
+    databasePath.as_ref().join(getManifestFileName(file_num))
 }
 
-fn temp_file_name<P: AsRef<Path>>(dbname: P, file_num: FileNum) -> PathBuf {
-    dbname.as_ref().join(format!("{:06}.dbtmp", file_num))
+fn getTempFilePath<P: AsRef<Path>>(databasePath: P, fileNum: FileNum) -> PathBuf {
+    databasePath.as_ref().join(format!("{:06}.dbtmp", fileNum))
 }
 
-fn currentFilePath<P: AsRef<Path>>(dbName: P) -> PathBuf {
+fn getCurrentFilePath<P: AsRef<Path>>(dbName: P) -> PathBuf {
     dbName.as_ref().join("CURRENT").to_owned()
 }
 
 /// CURRENT 文件的内容应该是MANIFEST文件的名字
 pub fn readCurrentFile(env: &Box<dyn Env>, dbname: &Path) -> Result<String> {
     let mut currentFileContent = String::new();
-    let mut f = env.open_sequential_file(Path::new(&currentFilePath(dbname)))?;
+    let mut f = env.open_sequential_file(Path::new(&getCurrentFilePath(dbname)))?;
 
     f.read_to_string(&mut currentFileContent)?;
 
@@ -857,29 +856,30 @@ pub fn readCurrentFile(env: &Box<dyn Env>, dbname: &Path) -> Result<String> {
     Ok(currentFileContent)
 }
 
-pub fn set_current_file<P: AsRef<Path>>(env: &Box<dyn Env>,
-                                        dbname: P,
-                                        manifest_file_num: FileNum) -> Result<()> {
-    let dbname = dbname.as_ref();
-    let manifest_base = manifest_name(manifest_file_num);
-    let tempfile = temp_file_name(dbname, manifest_file_num);
+pub fn setCurrentFile<P: AsRef<Path>>(env: &Box<dyn Env>,
+                                      databasePath: P,
+                                      manifestFileNum: FileNum) -> Result<()> {
+    let databasePath = databasePath.as_ref();
+    let tempFilePath = getTempFilePath(databasePath, manifestFileNum);
+
     {
-        let mut f = env.open_writable_file(Path::new(&tempfile))?;
-        f.write_all(manifest_base.display().to_string().as_bytes())?;
-        f.write_all(b"\n")?;
+        let mut tempFile = env.open_writable_file(Path::new(&tempFilePath))?;
+        tempFile.write_all(getManifestFileName(manifestFileNum).display().to_string().as_bytes())?;
+        tempFile.write_all(b"\n")?;
     }
-    let currentfile = currentFilePath(dbname);
-    if let Err(e) = env.rename(Path::new(&tempfile), Path::new(&currentfile)) {
-        // ignore error.
-        let _ = env.delete(Path::new(&tempfile));
+
+    // 把temp文件重命名为CURRENT
+    if let Err(e) = env.rename(Path::new(&tempFilePath), Path::new(&getCurrentFilePath(databasePath))) {
+        let _ = env.delete(Path::new(&tempFilePath));
         return Err(Status::from(e));
     }
+
     Ok(())
 }
 
 /// sort_files_by_smallest sorts the list of files by the smallest keys of the files.
-fn sort_files_by_smallest<C: Cmp>(cmp: &C, files: &mut Vec<FileMetaHandle>) {
-    files.sort_by(|a, b| cmp.cmp(&a.borrow().smallest, &b.borrow().smallest))
+fn sort_files_by_smallest<C: Comparator>(cmp: &C, files: &mut Vec<FileMetaHandle>) {
+    files.sort_by(|a, b| cmp.compare(&a.borrow().smallest, &b.borrow().smallest))
 }
 
 /// merge_iters merges and collects the items from two sorted iterators.
@@ -927,7 +927,7 @@ fn merge_iters<
 
 /// get_range returns the indices of the files within files that have the smallest lower bound
 /// respectively the largest upper bound.
-fn get_range<'a, C: Cmp, I: Iterator<Item=&'a FileMetaHandle>>(
+fn get_range<'a, C: Comparator, I: Iterator<Item=&'a FileMetaHandle>>(
     c: &C,
     files: I,
 ) -> (Vec<u8>, Vec<u8>) {
@@ -941,10 +941,10 @@ fn get_range<'a, C: Cmp, I: Iterator<Item=&'a FileMetaHandle>>(
             largest = Some(f.borrow().largest.clone());
         }
         let f = f.borrow();
-        if c.cmp(&f.smallest, smallest.as_ref().unwrap()) == Ordering::Less {
+        if c.compare(&f.smallest, smallest.as_ref().unwrap()) == Ordering::Less {
             smallest = Some(f.smallest.clone());
         }
-        if c.cmp(&f.largest, largest.as_ref().unwrap()) == Ordering::Greater {
+        if c.compare(&f.largest, largest.as_ref().unwrap()) == Ordering::Greater {
             largest = Some(f.largest.clone());
         }
     }

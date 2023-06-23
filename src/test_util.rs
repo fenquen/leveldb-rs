@@ -1,4 +1,4 @@
-use crate::cmp::{Cmp, DefaultCmp};
+use crate::cmp::{Comparator, DefaultCmp};
 use crate::types::{current_key_val, LdbIterator};
 
 use std::cmp::Ordering;
@@ -47,7 +47,7 @@ impl<'a> LdbIterator for TestLdbIter<'a> {
     fn seek(&mut self, k: &[u8]) {
         self.ix = 0;
         self.init = true;
-        while self.ix < self.v.len() && DefaultCmp.cmp(self.v[self.ix].0, k) == Ordering::Less {
+        while self.ix < self.v.len() && DefaultCmp.compare(self.v[self.ix].0, k) == Ordering::Less {
             self.ix += 1;
         }
     }

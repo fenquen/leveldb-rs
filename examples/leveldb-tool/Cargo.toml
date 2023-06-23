@@ -1,7 +1,0 @@
-[package]
-name = "leveldb-tool"
-version = "0.1.0"
-authors = ["Lewin Bormann <lewin@lewin-bormann.info>"]
-
-[dependencies]
-rusty-leveldb = { path = "../../" }

@@ -5,6 +5,7 @@ use crate::types::{FileMetaData, FileNum, SequenceNumber};
 use integer_encoding::{VarIntReader, VarIntWriter};
 
 use std::collections::HashSet;
+use std::default::default;
 use std::io::{Read, Write};
 
 #[derive(PartialEq, Debug, Clone)]
@@ -59,11 +60,11 @@ fn readLengthPrefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
 
 /// manages changes to the set of managed SSTables and logfiles.
 pub struct VersionEdit {
-    comparator: Option<String>,
+    pub comparatorName: Option<String>,
     pub logNumber: Option<FileNum>,
     pub prevLogNumber: Option<FileNum>,
-    pub next_file_number: Option<FileNum>,
-    pub last_seq: Option<SequenceNumber>,
+    pub nextFileNumber: Option<FileNum>,
+    pub lastSequenceNumber: Option<SequenceNumber>,
 
     pub compactionPointerVec: Vec<CompactionPointer>,
     pub deleted: HashSet<(usize, FileNum)>,
@@ -73,14 +74,10 @@ pub struct VersionEdit {
 impl VersionEdit {
     pub fn new() -> VersionEdit {
         VersionEdit {
-            comparator: None,
-            logNumber: None,
-            prevLogNumber: None,
-            next_file_number: None,
-            last_seq: None,
             compactionPointerVec: Vec::with_capacity(8),
             deleted: HashSet::with_capacity(8),
             new_files: Vec::with_capacity(8),
+            ..Default::default()
         }
     }
 
@@ -96,26 +93,6 @@ impl VersionEdit {
         self.deleted.insert((level, file_num));
     }
 
-    pub fn set_comparator_name(&mut self, name: &str) {
-        self.comparator = Some(name.to_string())
-    }
-
-    pub fn set_log_num(&mut self, num: u64) {
-        self.logNumber = Some(num)
-    }
-
-    pub fn set_prev_log_num(&mut self, num: u64) {
-        self.prevLogNumber = Some(num);
-    }
-
-    pub fn set_last_seq(&mut self, num: u64) {
-        self.last_seq = Some(num)
-    }
-
-    pub fn set_next_file(&mut self, num: FileNum) {
-        self.next_file_number = Some(num)
-    }
-
     pub fn set_compact_pointer(&mut self, level: usize, key: InternalKey) {
         self.compactionPointerVec.push(CompactionPointer {
             level,
@@ -125,62 +102,62 @@ impl VersionEdit {
 
     /// Encode this VersionEdit into a buffer.
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(256);
+        let mut buffer = Vec::with_capacity(256);
 
-        if let Some(ref cmp) = self.comparator {
+        if let Some(ref cmp) = self.comparatorName {
             // swallow errors, because it's a pure in-memory write
-            buf.write_varint(EditTag::Comparator as u32).unwrap();
+            buffer.write_varint(EditTag::Comparator as u32).unwrap();
             // data is prefixed by a varint32 describing the length of the following chunk
-            buf.write_varint(cmp.len()).unwrap();
-            buf.write_all(cmp.as_bytes()).unwrap();
+            buffer.write_varint(cmp.len()).unwrap();
+            buffer.write_all(cmp.as_bytes()).unwrap();
         }
 
         if let Some(lognum) = self.logNumber {
-            buf.write_varint(EditTag::LogNumber as u32).unwrap();
-            buf.write_varint(lognum).unwrap();
+            buffer.write_varint(EditTag::LogNumber as u32).unwrap();
+            buffer.write_varint(lognum).unwrap();
         }
 
         if let Some(prevlognum) = self.prevLogNumber {
-            buf.write_varint(EditTag::PrevLogNumber as u32).unwrap();
-            buf.write_varint(prevlognum).unwrap();
+            buffer.write_varint(EditTag::PrevLogNumber as u32).unwrap();
+            buffer.write_varint(prevlognum).unwrap();
         }
 
-        if let Some(nfn) = self.next_file_number {
-            buf.write_varint(EditTag::NextFileNumber as u32).unwrap();
-            buf.write_varint(nfn).unwrap();
+        if let Some(nfn) = self.nextFileNumber {
+            buffer.write_varint(EditTag::NextFileNumber as u32).unwrap();
+            buffer.write_varint(nfn).unwrap();
         }
 
-        if let Some(ls) = self.last_seq {
-            buf.write_varint(EditTag::LastSequence as u32).unwrap();
-            buf.write_varint(ls).unwrap();
+        if let Some(ls) = self.lastSequenceNumber {
+            buffer.write_varint(EditTag::LastSequence as u32).unwrap();
+            buffer.write_varint(ls).unwrap();
         }
 
         for cptr in self.compactionPointerVec.iter() {
-            buf.write_varint(EditTag::CompactPointer as u32).unwrap();
-            buf.write_varint(cptr.level).unwrap();
-            buf.write_varint(cptr.key.len()).unwrap();
-            buf.write_all(cptr.key.as_ref()).unwrap();
+            buffer.write_varint(EditTag::CompactPointer as u32).unwrap();
+            buffer.write_varint(cptr.level).unwrap();
+            buffer.write_varint(cptr.key.len()).unwrap();
+            buffer.write_all(cptr.key.as_ref()).unwrap();
         }
 
         for df in self.deleted.iter() {
-            buf.write_varint(EditTag::DeletedFile as u32).unwrap();
-            buf.write_varint(df.0).unwrap();
-            buf.write_varint(df.1).unwrap();
+            buffer.write_varint(EditTag::DeletedFile as u32).unwrap();
+            buffer.write_varint(df.0).unwrap();
+            buffer.write_varint(df.1).unwrap();
         }
 
         for nf in self.new_files.iter() {
-            buf.write_varint(EditTag::NewFile as u32).unwrap();
-            buf.write_varint(nf.0).unwrap();
-            buf.write_varint(nf.1.num).unwrap();
-            buf.write_varint(nf.1.size).unwrap();
+            buffer.write_varint(EditTag::NewFile as u32).unwrap();
+            buffer.write_varint(nf.0).unwrap();
+            buffer.write_varint(nf.1.num).unwrap();
+            buffer.write_varint(nf.1.size).unwrap();
 
-            buf.write_varint(nf.1.smallest.len()).unwrap();
-            buf.write_all(nf.1.smallest.as_ref()).unwrap();
-            buf.write_varint(nf.1.largest.len()).unwrap();
-            buf.write_all(nf.1.largest.as_ref()).unwrap();
+            buffer.write_varint(nf.1.smallest.len()).unwrap();
+            buffer.write_all(nf.1.smallest.as_ref()).unwrap();
+            buffer.write_varint(nf.1.largest.len()).unwrap();
+            buffer.write_all(nf.1.largest.as_ref()).unwrap();
         }
 
-        buf
+        buffer
     }
 
     pub fn decodeFrom(src: &[u8]) -> Result<VersionEdit> {
@@ -193,9 +170,9 @@ impl VersionEdit {
                     EditTag::Comparator => {
                         let buffer = readLengthPrefixed(&mut reader)?;
                         if let Ok(c) = String::from_utf8(buffer) {
-                            versionEdit.comparator = Some(c);
+                            versionEdit.comparatorName = Some(c);
                         } else {
-                            return err(StatusCode::Corruption, "Bad comparator encoding");
+                            return err(StatusCode::Corruption, "Bad Comparator encoding");
                         }
                     }
                     EditTag::LogNumber => {
@@ -214,14 +191,14 @@ impl VersionEdit {
                     }
                     EditTag::NextFileNumber => {
                         if let Ok(nextFileNumber) = reader.read_varint() {
-                            versionEdit.next_file_number = Some(nextFileNumber);
+                            versionEdit.nextFileNumber = Some(nextFileNumber);
                         } else {
                             return err(StatusCode::IOError, "Couldn't read next_file_number");
                         }
                     }
                     EditTag::LastSequence => {
                         if let Ok(ls) = reader.read_varint() {
-                            versionEdit.last_seq = Some(ls);
+                            versionEdit.lastSequenceNumber = Some(ls);
                         } else {
                             return err(StatusCode::IOError, "Couldn't read last_sequence");
                         }

@@ -30,11 +30,6 @@ async = ["tokio"]
 time-test = "0.2"
 bencher = "0.1"
 
-[[bench]]
-name = "maps_bench"
-harness = false
-path = "src/benches/maps_bench.rs"
-
 [workspace]
-members = ["examples/leveldb-tool", "examples/word-analyze",  "examples/stresstest", "examples/asyncdb"]
+members = ["examples/stresstest", "examples/asyncdb"]
 

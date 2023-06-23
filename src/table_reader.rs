@@ -103,10 +103,10 @@ impl Table {
     }
 
     /// Creates a new table reader operating on internal keys (i.e., InternalKey). This means that
-    /// a different comparator (internal_key_cmp) and a different filter policy
+    /// a different Comparator (internal_key_cmp) and a different filter policy
     /// (InternalFilterPolicy) are used.
     pub fn new(mut opt: Options, file: Rc<Box<dyn RandomAccess>>, size: usize) -> Result<Table> {
-        opt.cmp = Rc::new(Box::new(InternalKeyCmp(opt.cmp.clone())));
+        opt.comparator = Rc::new(Box::new(InternalKeyCmp(opt.comparator.clone())));
         opt.filter_policy = Rc::new(Box::new(filter::InternalFilterPolicy::new(
             opt.filter_policy,
         )));
@@ -188,7 +188,7 @@ impl Table {
 
         let handle;
         if let Some((last_in_block, h)) = current_key_val(&index_iter) {
-            if self.opt.cmp.cmp(key, &last_in_block) == Ordering::Less {
+            if self.opt.comparator.compare(key, &last_in_block) == Ordering::Less {
                 handle = BlockHandle::decode(&h).unwrap().0;
             } else {
                 return Ok(None);
@@ -213,7 +213,7 @@ impl Table {
         // Go to entry and check if it's the wanted entry.
         iter.seek(key);
         if let Some((k, v)) = current_key_val(&iter) {
-            if self.opt.cmp.cmp(&k, key) >= Ordering::Equal {
+            if self.opt.comparator.compare(&k, key) >= Ordering::Equal {
                 return Ok(Some((k, v)));
             }
         }
@@ -313,7 +313,7 @@ impl LdbIterator for TableIterator {
 
         // It's possible that this is a seek past-last; reset in that case.
         if let Some((past_block, handle)) = current_key_val(&self.index_block) {
-            if self.table.opt.cmp.cmp(to, &past_block) <= Ordering::Equal {
+            if self.table.opt.comparator.compare(to, &past_block) <= Ordering::Equal {
                 // ok, found right block: continue
                 if let Ok(()) = self.load_block(&handle) {
                     // current_block is always set if load_block() returned Ok.

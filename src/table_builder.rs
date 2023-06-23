@@ -104,15 +104,15 @@ impl<Dst: Write> TableBuilder<Dst> {
 /// calculating checksums and bloom filters.
 impl<Dst: Write> TableBuilder<Dst> {
     /// Create a new table builder.
-    /// The comparator in opt will be wrapped in a InternalKeyCmp, and the filter policy
+    /// The Comparator in opt will be wrapped in a InternalKeyCmp, and the filter policy
     /// in an InternalFilterPolicy.
     pub fn new(mut opt: Options, dst: Dst) -> TableBuilder<Dst> {
-        opt.cmp = Rc::new(Box::new(InternalKeyCmp(opt.cmp.clone())));
+        opt.comparator = Rc::new(Box::new(InternalKeyCmp(opt.comparator.clone())));
         opt.filter_policy = Rc::new(Box::new(InternalFilterPolicy::new(opt.filter_policy)));
         TableBuilder::new_raw(opt, dst)
     }
 
-    /// Like new(), but doesn't wrap the comparator in an InternalKeyCmp (for testing)
+    /// Like new(), but doesn't wrap the Comparator in an InternalKeyCmp (for testing)
     pub fn new_raw(opt: Options, dst: Dst) -> TableBuilder<Dst> {
         TableBuilder {
             opt: opt.clone(),
@@ -149,7 +149,7 @@ impl<Dst: Write> TableBuilder<Dst> {
         assert!(self.data_block.is_some());
 
         if !self.prev_block_last_key.is_empty() {
-            assert!(self.opt.cmp.cmp(&self.prev_block_last_key, key) == Ordering::Less);
+            assert!(self.opt.comparator.compare(&self.prev_block_last_key, key) == Ordering::Less);
         }
 
         if self.data_block.as_ref().unwrap().size_estimate() > self.opt.block_size {
@@ -174,7 +174,7 @@ impl<Dst: Write> TableBuilder<Dst> {
         assert!(self.data_block.is_some());
 
         let block = self.data_block.take().unwrap();
-        let sep = self.opt.cmp.find_shortest_sep(&block.last_key(), next_key);
+        let sep = self.opt.comparator.find_shortest_sep(&block.last_key(), next_key);
         self.prev_block_last_key = Vec::from(block.last_key());
         let contents = block.finish();
 
@@ -228,7 +228,7 @@ impl<Dst: Write> TableBuilder<Dst> {
             // Find a key reliably past the last key
             let key_past_last = self
                 .opt
-                .cmp
+                .comparator
                 .find_short_succ(self.data_block.as_ref().unwrap().last_key());
             self.write_data_block(&key_past_last)?;
         }

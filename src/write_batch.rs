@@ -10,7 +10,6 @@ const COUNT_OFFSET: usize = 8;
 const HEADER_SIZE: usize = 12;
 
 /// A WriteBatch contains entries to be written to a MemTable (for example) in a compact form.
-///
 /// The storage format is (with the respective length in bytes)
 ///
 /// [tag: 1, keylen: ~var, key: keylen, vallen: ~var, val: vallen]
@@ -32,12 +31,9 @@ impl WriteBatch {
         self.entries.extend_from_slice(from);
     }
 
-    /// Adds an entry to a WriteBatch, to be added to the database.
     #[allow(unused_assignments)]
     pub fn put(&mut self, k: &[u8], v: &[u8]) {
-        self.entries
-            .write_all(&[ValueType::TypeValue as u8])
-            .unwrap();
+        self.entries.write_all(&[ValueType::TypeValue as u8]).unwrap();
         self.entries.write_varint(k.len()).unwrap();
         self.entries.write_all(k).unwrap();
         self.entries.write_varint(v.len()).unwrap();
@@ -73,7 +69,7 @@ impl WriteBatch {
         c.encode_fixed(&mut self.entries[COUNT_OFFSET..COUNT_OFFSET + 4]);
     }
 
-    /// Returns how many operations are in a batch.
+    /// returns how many operations are in a batch.
     pub fn count(&self) -> u32 {
         u32::decode_fixed(&self.entries[COUNT_OFFSET..COUNT_OFFSET + 4])
     }

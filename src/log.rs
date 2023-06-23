@@ -26,7 +26,7 @@ pub enum RecordType {
 }
 
 pub struct LogWriter<W: Write> {
-    dst: W,
+    writer: W,
     digest: crc32::Digest,
     current_block_offset: usize,
     block_size: usize,
@@ -36,7 +36,7 @@ impl<W: Write> LogWriter<W> {
     pub fn new(writer: W) -> LogWriter<W> {
         let digest = crc32::Digest::new(crc32::CASTAGNOLI);
         LogWriter {
-            dst: writer,
+            writer: writer,
             current_block_offset: 0,
             block_size: BLOCK_SIZE,
             digest,
@@ -51,45 +51,46 @@ impl<W: Write> LogWriter<W> {
         w
     }
 
-    pub fn add_record(&mut self, r: &[u8]) -> Result<usize> {
-        let mut record = &r[..];
-        let mut first_frag = true;
+    pub fn addRecord(&mut self, record: &[u8]) -> Result<usize> {
+        let mut record = &record[..];
+        let mut firstRound = true;
         let mut result = Ok(0);
+
         while result.is_ok() && !record.is_empty() {
             assert!(self.block_size > HEADER_SIZE);
 
             let space_left = self.block_size - self.current_block_offset;
 
-            // Fill up block; go to next block.
+            // fill up block; go to next block.
             if space_left < HEADER_SIZE {
-                self.dst.write_all(&vec![0, 0, 0, 0, 0, 0][0..space_left])?;
+                self.writer.write_all(&vec![0, 0, 0, 0, 0, 0][0..space_left])?;
                 self.current_block_offset = 0;
             }
 
-            let avail_for_data = self.block_size - self.current_block_offset - HEADER_SIZE;
+            let availableLenForData = self.block_size - self.current_block_offset - HEADER_SIZE;
 
-            let data_frag_len = if record.len() < avail_for_data {
+            let data_frag_len = if record.len() < availableLenForData {
                 record.len()
             } else {
-                avail_for_data
+                availableLenForData
             };
 
-            let recordtype;
+            let recordType =
+                if firstRound && data_frag_len == record.len() {
+                    RecordType::Full
+                } else if firstRound {
+                    RecordType::First
+                } else if data_frag_len == record.len() {
+                    RecordType::Last
+                } else {
+                    RecordType::Middle
+                };
 
-            if first_frag && data_frag_len == record.len() {
-                recordtype = RecordType::Full;
-            } else if first_frag {
-                recordtype = RecordType::First;
-            } else if data_frag_len == record.len() {
-                recordtype = RecordType::Last;
-            } else {
-                recordtype = RecordType::Middle;
-            }
-
-            result = self.emit_record(recordtype, record, data_frag_len);
+            result = self.emit_record(recordType, record, data_frag_len);
             record = &record[data_frag_len..];
-            first_frag = false;
+            firstRound = false;
         }
+
         result
     }
 
@@ -103,17 +104,17 @@ impl<W: Write> LogWriter<W> {
         let chksum = mask_crc(self.digest.sum32());
 
         let mut s = 0;
-        s += self.dst.write(&chksum.encode_fixed_vec())?;
-        s += self.dst.write_fixedint(len as u16)?;
-        s += self.dst.write(&[t as u8])?;
-        s += self.dst.write(&data[0..len])?;
+        s += self.writer.write(&chksum.encode_fixed_vec())?;
+        s += self.writer.write_fixedint(len as u16)?;
+        s += self.writer.write(&[t as u8])?;
+        s += self.writer.write(&data[0..len])?;
 
         self.current_block_offset += s;
         Ok(s)
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.dst.flush()?;
+        self.writer.flush()?;
         Ok(())
     }
 }
@@ -167,6 +168,7 @@ impl<R: Read> LogReader<R> {
             let mut destOffset: usize = 0;
 
             dest.resize(destOffset + length as usize, 0);
+
             readCount = self.src.read(&mut dest[destOffset..destOffset + length as usize])?;
             self.blockOffset += readCount;
 

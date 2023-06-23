@@ -1,4 +1,4 @@
-use crate::cmp::Cmp;
+use crate::cmp::Comparator;
 use crate::key_types::{parse_internal_key, truncate_to_userkey, LookupKey, ValueType};
 use crate::merging_iter::MergingIter;
 use crate::snapshot::Snapshot;
@@ -15,8 +15,8 @@ const READ_BYTES_PERIOD: isize = 1048576;
 
 /// DBIterator is an iterator over the contents of a database.
 pub struct DBIterator {
-    // A user comparator.
-    cmp: Rc<Box<dyn Cmp>>,
+    // A user Comparator.
+    cmp: Rc<Box<dyn Comparator>>,
     vset: Shared<VersionSet>,
     iter: MergingIter,
     // By holding onto a snapshot, we make sure that the iterator iterates over the state at the
@@ -36,7 +36,7 @@ pub struct DBIterator {
 
 impl DBIterator {
     pub fn new(
-        cmp: Rc<Box<dyn Cmp>>,
+        cmp: Rc<Box<dyn Comparator>>,
         vset: Shared<VersionSet>,
         iter: MergingIter,
         ss: Snapshot,
@@ -89,7 +89,7 @@ impl DBIterator {
                     self.savedkey.extend_from_slice(ukey);
                     skipping = true;
                 } else if typ == ValueType::TypeValue {
-                    if skipping && self.cmp.cmp(ukey, &self.savedkey) <= Ordering::Equal {
+                    if skipping && self.cmp.compare(ukey, &self.savedkey) <= Ordering::Equal {
                         // Entry hidden, because it's smaller than the key to be skipped.
                     } else {
                         self.valid = true;
@@ -131,7 +131,7 @@ impl DBIterator {
 
             if seq > 0 && seq <= self.ss.sequence() {
                 if value_type != ValueType::TypeDeletion
-                    && self.cmp.cmp(ukey, &self.savedkey) == Ordering::Less
+                    && self.cmp.compare(ukey, &self.savedkey) == Ordering::Less
                 {
                     // We found a non-deleted entry for a previous key (in the previous iteration)
                     break;
@@ -231,7 +231,7 @@ impl LdbIterator for DBIterator {
                 // Scan until we hit the next-smaller key.
                 self.iter.current(&mut self.keybuf, &mut self.savedval);
                 truncate_to_userkey(&mut self.keybuf);
-                if self.cmp.cmp(&self.keybuf, &self.savedkey) == Ordering::Less {
+                if self.cmp.compare(&self.keybuf, &self.savedkey) == Ordering::Less {
                     break;
                 }
             }

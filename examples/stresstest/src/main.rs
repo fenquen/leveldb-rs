@@ -31,8 +31,6 @@ fn gen_string(n: usize) -> String {
 }
 
 fn write(db: &mut DB, n: usize) {
-
-
     for _ in 0..n {
         db.put(gen_string(KEY_LEN).as_bytes(), gen_string(VAL_LEN).as_bytes()).unwrap();
     }

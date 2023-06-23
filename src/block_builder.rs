@@ -55,7 +55,7 @@ impl BlockBuilder {
         assert!(self.restart_counter <= self.opt.block_restart_interval);
         assert!(
             self.buffer.is_empty()
-                || self.opt.cmp.cmp(self.last_key.as_slice(), key) == Ordering::Less
+                || self.opt.comparator.compare(self.last_key.as_slice(), key) == Ordering::Less
         );
 
         let mut shared = 0;

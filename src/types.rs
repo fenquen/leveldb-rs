@@ -144,22 +144,32 @@ pub fn parse_file_name<P: AsRef<Path>>(ff: P) -> Result<(FileNum, FileType)> {
     let f = ff.as_ref().to_str().unwrap();
     if f == "CURRENT" {
         return Ok((0, FileType::Current));
-    } else if f == "LOCK" {
+    }
+
+    if f == "LOCK" {
         return Ok((0, FileType::DBLock));
-    } else if f == "LOG" || f == "LOG.old" {
+    }
+
+    if f == "LOG" || f == "LOG.old" {
         return Ok((0, FileType::InfoLog));
-    } else if f.starts_with("MANIFEST-") {
+    }
+
+    if f.starts_with("MANIFEST-") {
         if let Some(ix) = f.find('-') {
             if let Ok(num) = FileNum::from_str_radix(&f[ix + 1..], 10) {
                 return Ok((num, FileType::Descriptor));
             }
+
             return err(
                 StatusCode::InvalidArgument,
                 "manifest file number is invalid",
             );
         }
+
         return err(StatusCode::InvalidArgument, "manifest file has no dash");
-    } else if let Some(ix) = f.find('.') {
+    }
+
+    if let Some(ix) = f.find('.') {
         // 00012345.log 00123.sst ...
         if let Ok(num) = FileNum::from_str_radix(&f[0..ix], 10) {
             let typ = match &f[ix + 1..] {
@@ -180,5 +190,6 @@ pub fn parse_file_name<P: AsRef<Path>>(ff: P) -> Result<(FileNum, FileType)> {
             "invalid file number for table or temp file",
         );
     }
+
     err(StatusCode::InvalidArgument, "unknown file type")
 }

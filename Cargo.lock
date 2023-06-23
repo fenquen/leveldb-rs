@@ -93,22 +93,9 @@ dependencies = [
 
 [[package]]
 name = "integer-encoding"
-version = "1.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48dc51180a9b377fd75814d0cc02199c20f8e99433d6762f650d39cdbbd3b56f"
-
-[[package]]
-name = "integer-encoding"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
-
-[[package]]
-name = "leveldb-tool"
-version = "0.1.0"
-dependencies = [
- "rusty-leveldb",
-]
 
 [[package]]
 name = "libc"
@@ -184,7 +171,7 @@ dependencies = [
  "crc",
  "errno",
  "fs2",
- "integer-encoding 3.0.4",
+ "integer-encoding",
  "rand",
  "snap",
  "time-test",
@@ -365,11 +352,3 @@ name = "windows_x86_64_msvc"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
-
-[[package]]
-name = "word-analyze"
-version = "0.1.0"
-dependencies = [
- "integer-encoding 1.1.7",
- "rusty-leveldb",
-]

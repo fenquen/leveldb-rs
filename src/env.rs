@@ -30,7 +30,7 @@ impl RandomAccess for File {
 }
 
 pub struct FileLock {
-    pub id: String,
+    pub path: String,
 }
 
 pub trait Env {

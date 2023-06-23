@@ -233,7 +233,7 @@ impl MemFS {
                 } else {
                     o.get_mut().locked = true;
                     Ok(FileLock {
-                        id: path_to_string(p),
+                        path: path_to_string(p),
                     })
                 }
             }
@@ -244,15 +244,15 @@ impl MemFS {
                     locked: true,
                 });
                 Ok(FileLock {
-                    id: path_to_string(p),
+                    path: path_to_string(p),
                 })
             }
         }
     }
     fn unlock_(&self, l: FileLock) -> Result<()> {
         let mut fs = self.store.lock()?;
-        let id = l.id.clone();
-        match fs.entry(l.id) {
+        let id = l.path.clone();
+        match fs.entry(l.path) {
             Entry::Occupied(mut o) => {
                 if !o.get().locked {
                     err(

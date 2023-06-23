@@ -1,4 +1,4 @@
-use crate::cmp::Cmp;
+use crate::cmp::Comparator;
 use crate::types::SequenceNumber;
 
 use std::cmp::Ordering;
@@ -153,7 +153,7 @@ pub fn parse_memtable_key(mkey: MemtableKey) -> (usize, usize, u64, usize, usize
 
 /// cmp_memtable_key efficiently compares two memtable keys by only parsing what's actually needed.
 pub fn cmp_memtable_key<'a, 'b>(
-    ucmp: &dyn Cmp,
+    ucmp: &dyn Comparator,
     a: MemtableKey<'a>,
     b: MemtableKey<'b>,
 ) -> Ordering {
@@ -162,7 +162,7 @@ pub fn cmp_memtable_key<'a, 'b>(
     let userkey_a = &a[aoff..aoff + alen - 8];
     let userkey_b = &b[boff..boff + blen - 8];
 
-    match ucmp.cmp(userkey_a, userkey_b) {
+    match ucmp.compare(userkey_a, userkey_b) {
         Ordering::Less => Ordering::Less,
         Ordering::Greater => Ordering::Greater,
         Ordering::Equal => {
@@ -190,11 +190,11 @@ pub fn parse_internal_key(ikey: InternalKey) -> (ValueType, SequenceNumber, User
 /// cmp_internal_key efficiently compares keys in InternalKey format by only parsing the parts that
 /// are actually needed for a comparison.
 pub fn cmp_internal_key<'a, 'b>(
-    ucmp: &dyn Cmp,
+    ucmp: &dyn Comparator,
     a: InternalKey<'a>,
     b: InternalKey<'b>,
 ) -> Ordering {
-    match ucmp.cmp(&a[0..a.len() - 8], &b[0..b.len() - 8]) {
+    match ucmp.compare(&a[0..a.len() - 8], &b[0..b.len() - 8]) {
         Ordering::Less => Ordering::Less,
         Ordering::Greater => Ordering::Greater,
         Ordering::Equal => {

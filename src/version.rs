@@ -1,4 +1,4 @@
-use crate::cmp::{Cmp, InternalKeyCmp};
+use crate::cmp::{Comparator, InternalKeyCmp};
 use crate::error::Result;
 use crate::key_types::{parse_internal_key, InternalKey, LookupKey, UserKey, ValueType};
 use crate::table_cache::TableCache;
@@ -10,8 +10,7 @@ use std::default::Default;
 use std::rc::Rc;
 
 /// FileMetaHandle is a reference-counted FileMetaData object with interior mutability. This is
-/// necessary to provide a shared metadata container that can be modified while referenced by e.g.
-/// multiple versions.
+/// necessary to provide a shared metadata container that can be modified while referenced by e.g. multiple versions.
 pub type FileMetaHandle = Shared<FileMetaData>;
 
 /// Contains statistics about seeks occurred in a file.
@@ -22,7 +21,7 @@ pub struct GetStats {
 
 pub struct Version {
     tableCache: Shared<TableCache>,
-    user_cmp: Rc<Box<dyn Cmp>>,
+    user_cmp: Rc<Box<dyn Comparator>>,
     pub fileMetaHandleVecArr: [Vec<FileMetaHandle>; NUM_LEVELS],
 
     pub file_to_compact: Option<FileMetaHandle>,
@@ -32,15 +31,11 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn new(tableCache: Shared<TableCache>, ucmp: Rc<Box<dyn Cmp>>) -> Version {
+    pub fn new(tableCache: Shared<TableCache>, userComparator: Rc<Box<dyn Comparator>>) -> Version {
         Version {
             tableCache,
-            user_cmp: ucmp,
-            fileMetaHandleVecArr: Default::default(),
-            file_to_compact: None,
-            file_to_compact_lvl: 0,
-            compaction_score: None,
-            compaction_level: None,
+            user_cmp: userComparator,
+            ..Default::default()
         }
     }
 
@@ -57,7 +52,7 @@ impl Version {
     /// get returns the value for the specified key using the persistent tables contained in this
     /// Version.
     #[allow(unused_assignments)]
-    pub fn get<'a>(&self, key: InternalKey<'a>) -> Result<Option<(Vec<u8>, GetStats)>> {
+    pub fn get(&self, key: InternalKey) -> Result<Option<(Vec<u8>, GetStats)>> {
         let levels = self.get_overlapping(key);
         let ikey = key;
         let ukey = parse_internal_key(ikey).2;
@@ -87,10 +82,11 @@ impl Version {
                     // with a higher sequence number than the one in the supplied key.
                     let (typ, _, foundkey) = parse_internal_key(&k);
                     if typ == ValueType::TypeValue
-                        && self.user_cmp.cmp(foundkey, ukey) == Ordering::Equal
-                    {
+                        && self.user_cmp.compare(foundkey, ukey) == Ordering::Equal {
                         return Ok(Some((v, stats)));
-                    } else if typ == ValueType::TypeDeletion {
+                    }
+
+                    if typ == ValueType::TypeDeletion {
                         // Skip looking once we have found a deletion.
                         return Ok(None);
                     }
@@ -101,7 +97,7 @@ impl Version {
     }
 
     /// get_overlapping returns the files overlapping key in each level.
-    fn get_overlapping<'a>(&self, key: InternalKey<'a>) -> [Vec<FileMetaHandle>; NUM_LEVELS] {
+    fn get_overlapping(&self, key: InternalKey) -> [Vec<FileMetaHandle>; NUM_LEVELS] {
         let mut levels: [Vec<FileMetaHandle>; NUM_LEVELS] = Default::default();
         let ikey = key;
         let ukey = parse_internal_key(key).2;
@@ -114,8 +110,8 @@ impl Version {
                 parse_internal_key(&f.smallest).2,
                 parse_internal_key(&f.largest).2,
             );
-            if self.user_cmp.cmp(ukey, fsmallest) >= Ordering::Equal
-                && self.user_cmp.cmp(ukey, flargest) <= Ordering::Equal
+            if self.user_cmp.compare(ukey, fsmallest) >= Ordering::Equal
+                && self.user_cmp.compare(ukey, flargest) <= Ordering::Equal
             {
                 levels[0].push(f_.clone());
             }
@@ -129,7 +125,7 @@ impl Version {
             if let Some(ix) = find_file(&icmp, files, ikey) {
                 let f = files[ix].borrow();
                 let fsmallest = parse_internal_key(&f.smallest).2;
-                if self.user_cmp.cmp(ukey, fsmallest) >= Ordering::Equal {
+                if self.user_cmp.compare(ukey, fsmallest) >= Ordering::Equal {
                     levels[level].push(files[ix].clone());
                 }
             }
@@ -318,10 +314,10 @@ impl Version {
                     parse_internal_key(&f.largest).2,
                 );
                 // Skip files that are not overlapping.
-                if !ubegin.is_empty() && myself.user_cmp.cmp(flargest, &ubegin) == Ordering::Less {
+                if !ubegin.is_empty() && myself.user_cmp.compare(flargest, &ubegin) == Ordering::Less {
                     continue;
                 } else if !uend.is_empty()
-                    && myself.user_cmp.cmp(fsmallest, &uend) == Ordering::Greater
+                    && myself.user_cmp.compare(fsmallest, &uend) == Ordering::Greater
                 {
                     continue;
                 } else {
@@ -331,11 +327,11 @@ impl Version {
                     // the search.
                     if level == 0 {
                         if !ubegin.is_empty()
-                            && myself.user_cmp.cmp(fsmallest, &ubegin) == Ordering::Less
+                            && myself.user_cmp.compare(fsmallest, &ubegin) == Ordering::Less
                         {
                             return (Some((fsmallest.to_vec(), uend)), inputs);
                         } else if !uend.is_empty()
-                            && myself.user_cmp.cmp(flargest, &uend) == Ordering::Greater
+                            && myself.user_cmp.compare(flargest, &uend) == Ordering::Greater
                         {
                             return (Some((ubegin, flargest.to_vec())), inputs);
                         }
@@ -384,7 +380,7 @@ impl Version {
 pub fn new_version_iter(
     files: Vec<FileMetaHandle>,
     cache: Shared<TableCache>,
-    ucmp: Rc<Box<dyn Cmp>>,
+    ucmp: Rc<Box<dyn Comparator>>,
 ) -> VersionIter {
     VersionIter {
         files,
@@ -494,7 +490,7 @@ impl LdbIterator for VersionIter {
 }
 
 /// total_size returns the sum of sizes of the given files.
-pub fn total_size<'a, I: Iterator<Item = &'a FileMetaHandle>>(files: I) -> usize {
+pub fn total_size<'a, I: Iterator<Item=&'a FileMetaHandle>>(files: I) -> usize {
     files.fold(0, |a, f| a + f.borrow().size)
 }
 
@@ -513,17 +509,14 @@ fn key_is_before_file<'a>(cmp: &InternalKeyCmp, key: UserKey<'a>, f: &FileMetaHa
 }
 
 /// find_file returns the index of the file in files that potentially contains the internal key
-/// key. files must not overlap and be ordered ascendingly. If no file can contain the key, None is
-/// returned.
-fn find_file<'a>(
-    cmp: &InternalKeyCmp,
-    files: &[FileMetaHandle],
-    key: InternalKey<'a>,
-) -> Option<usize> {
+/// key. files must not overlap and be ordered ascendingly. If no file can contain the key, None is  returned.
+fn find_file<'a>(cmp: &InternalKeyCmp,
+                 files: &[FileMetaHandle],
+                 key: InternalKey<'a>, ) -> Option<usize> {
     let (mut left, mut right) = (0, files.len());
     while left < right {
         let mid = (left + right) / 2;
-        if cmp.cmp(&files[mid].borrow().largest, key) == Ordering::Less {
+        if cmp.compare(&files[mid].borrow().largest, key) == Ordering::Less {
             left = mid + 1;
         } else {
             right = mid;
@@ -554,17 +547,16 @@ fn some_file_overlaps_range_disjoint<'a, 'b>(
 
 /// some_file_overlaps_range returns true if any of the given possibly overlapping files contains
 /// keys in the range [smallest; largest].
-fn some_file_overlaps_range<'a, 'b>(
-    cmp: &InternalKeyCmp,
-    files: &[FileMetaHandle],
-    smallest: UserKey<'a>,
-    largest: UserKey<'b>,
-) -> bool {
+fn some_file_overlaps_range<'a, 'b>(cmp: &InternalKeyCmp,
+                                    files: &[FileMetaHandle],
+                                    smallest: UserKey<'a>,
+                                    largest: UserKey<'b>, ) -> bool {
     for f in files {
         if !(key_is_after_file(cmp, smallest, f) || key_is_before_file(cmp, largest, f)) {
             return true;
         }
     }
+
     false
 }
 
@@ -581,13 +573,11 @@ pub mod testutil {
 
     use std::path::Path;
 
-    pub fn new_file(
-        num: u64,
-        smallest: &[u8],
-        smallestix: u64,
-        largest: &[u8],
-        largestix: u64,
-    ) -> FileMetaHandle {
+    pub fn new_file(num: u64,
+                    smallest: &[u8],
+                    smallestix: u64,
+                    largest: &[u8],
+                    largestix: u64, ) -> FileMetaHandle {
         share(FileMetaData {
             allowed_seeks: 10,
             size: 163840,
@@ -599,15 +589,11 @@ pub mod testutil {
 
     /// write_table creates a table with the given number and contents (must be sorted!) in the
     /// memenv. The sequence numbers given to keys start with startseq.
-    pub fn write_table(
-        me: &Box<dyn Env>,
-        contents: &[(&[u8], &[u8], ValueType)],
-        startseq: u64,
-        num: FileNum,
-    ) -> FileMetaHandle {
-        let dst = me
-            .open_writable_file(Path::new(&table_file_name("db", num)))
-            .unwrap();
+    pub fn write_table(me: &Box<dyn Env>,
+                       contents: &[(&[u8], &[u8], ValueType)],
+                       startseq: u64,
+                       num: FileNum, ) -> FileMetaHandle {
+        let dst = me.open_writable_file(Path::new(&table_file_name("db", num))).unwrap();
         let mut seq = startseq;
         let keys: Vec<Vec<u8>> = contents
             .iter()
@@ -638,10 +624,8 @@ pub mod testutil {
         let opts = options::for_test();
         let env = opts.env.clone();
 
-        // The different levels overlap in a sophisticated manner to be able to test compactions
-        // and so on.
-        // The sequence numbers are in "natural order", i.e. highest levels have lowest sequence
-        // numbers.
+        // The different levels overlap in a sophisticated manner to be able to test compactions and so on.
+        // The sequence numbers are in "natural order", i.e. highest levels have lowest sequence numbers.
 
         // Level 0 (overlapping)
         let f2: &[(&[u8], &[u8], ValueType)] = &[
@@ -712,342 +696,5 @@ pub mod testutil {
         v.fileMetaHandleVecArr[2] = vec![t6, t7];
         v.fileMetaHandleVecArr[3] = vec![t8, t9];
         (v, opts)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::testutil::*;
-    use super::*;
-
-    use crate::cmp::DefaultCmp;
-    use crate::error::Result;
-    use crate::merging_iter::MergingIter;
-    use crate::options;
-    use crate::test_util::{test_iterator_properties, LdbIteratorIter};
-
-    #[test]
-    fn test_version_concat_iter() {
-        let v = make_version().0;
-
-        let expected_entries = vec![0, 9, 8, 4];
-        for l in 1..4 {
-            let mut iter = v.new_concat_iter(l);
-            let iter = LdbIteratorIter::wrap(&mut iter);
-            assert_eq!(iter.count(), expected_entries[l]);
-        }
-    }
-
-    #[test]
-    fn test_version_concat_iter_properties() {
-        let v = make_version().0;
-        let iter = v.new_concat_iter(3);
-        test_iterator_properties(iter);
-    }
-
-    #[test]
-    fn test_version_max_next_level_overlapping() {
-        let v = make_version().0;
-        assert_eq!(218, v.max_next_level_overlapping_bytes());
-    }
-
-    #[test]
-    fn test_version_all_iters() {
-        let v = make_version().0;
-        let iters = v.new_iters().unwrap();
-        let mut opt = options::for_test();
-        opt.cmp = Rc::new(Box::new(InternalKeyCmp(Rc::new(Box::new(DefaultCmp)))));
-
-        let mut miter = MergingIter::new(opt.cmp.clone(), iters);
-        assert_eq!(LdbIteratorIter::wrap(&mut miter).count(), 30);
-
-        // Check that all elements are in order.
-        let init = LookupKey::new("000".as_bytes(), MAX_SEQUENCE_NUMBER);
-        let cmp = InternalKeyCmp(Rc::new(Box::new(DefaultCmp)));
-        LdbIteratorIter::wrap(&mut miter).fold(init.internal_key().to_vec(), |b, (k, _)| {
-            assert!(cmp.cmp(&b, &k) == Ordering::Less);
-            k
-        });
-    }
-
-    #[test]
-    fn test_version_summary() {
-        let v = make_version().0;
-        let expected = "level 0: 2 files, 483 bytes ([(1, 232), (2, 251)]); level 1: 3 files, 651 \
-                        bytes ([(3, 218), (4, 216), (5, 217)]); level 2: 2 files, 468 bytes ([(6, \
-                        218), (7, 250)]); level 3: 2 files, 400 bytes ([(8, 200), (9, 200)]); ";
-        assert_eq!(expected, &v.level_summary());
-    }
-
-    #[test]
-    fn test_version_get_simple() {
-        let v = make_version().0;
-        let cases: &[(&[u8], u64, Result<Option<Vec<u8>>>)] = &[
-            ("aaa".as_bytes(), 1, Ok(None)),
-            ("aaa".as_bytes(), 100, Ok(Some("val1".as_bytes().to_vec()))),
-            ("aaa".as_bytes(), 21, Ok(Some("val0".as_bytes().to_vec()))),
-            ("aab".as_bytes(), 0, Ok(None)),
-            ("aab".as_bytes(), 100, Ok(Some("val2".as_bytes().to_vec()))),
-            ("aac".as_bytes(), 100, Ok(None)),
-            ("aac".as_bytes(), 25, Ok(Some("val3".as_bytes().to_vec()))),
-            ("aba".as_bytes(), 100, Ok(Some("val3".as_bytes().to_vec()))),
-            ("aba".as_bytes(), 25, Ok(Some("val4".as_bytes().to_vec()))),
-            ("daa".as_bytes(), 100, Ok(Some("val1".as_bytes().to_vec()))),
-            ("dab".as_bytes(), 1, Ok(None)),
-            ("dac".as_bytes(), 100, Ok(None)),
-            ("gba".as_bytes(), 100, Ok(Some("val3".as_bytes().to_vec()))),
-            // deleted key
-            ("gca".as_bytes(), 100, Ok(None)),
-            ("gbb".as_bytes(), 100, Ok(None)),
-        ];
-
-        for ref c in cases {
-            match v.get(LookupKey::new(c.0, c.1).internal_key()) {
-                Ok(Some((val, _))) => assert_eq!(c.2.as_ref().unwrap().as_ref().unwrap(), &val),
-                Ok(None) => assert!(c.2.as_ref().unwrap().as_ref().is_none()),
-                Err(_) => assert!(c.2.is_err()),
-            }
-        }
-    }
-
-    #[test]
-    fn test_version_get_overlapping_basic() {
-        let v = make_version().0;
-
-        // Overlapped by tables 1 and 2.
-        let ol = v.get_overlapping(LookupKey::new(b"aay", 50).internal_key());
-        // Check that sorting order is newest-first in L0.
-        assert_eq!(2, ol[0][0].borrow().num);
-        // Check that table from L1 matches.
-        assert_eq!(3, ol[1][0].borrow().num);
-
-        let ol = v.get_overlapping(LookupKey::new(b"cb", 50).internal_key());
-        assert_eq!(3, ol[1][0].borrow().num);
-        assert_eq!(6, ol[2][0].borrow().num);
-
-        let ol = v.get_overlapping(LookupKey::new(b"x", 50).internal_key());
-        for i in 0..NUM_LEVELS {
-            assert!(ol[i].is_empty());
-        }
-    }
-
-    #[test]
-    fn test_version_overlap_in_level() {
-        let v = make_version().0;
-
-        for &(level, (k1, k2), want) in &[
-            (0, ("000".as_bytes(), "003".as_bytes()), false),
-            (0, ("aa0".as_bytes(), "abx".as_bytes()), true),
-            (1, ("012".as_bytes(), "013".as_bytes()), false),
-            (1, ("abc".as_bytes(), "def".as_bytes()), true),
-            (2, ("xxx".as_bytes(), "xyz".as_bytes()), false),
-            (2, ("gac".as_bytes(), "gaz".as_bytes()), true),
-        ] {
-            if want {
-                assert!(v.overlap_in_level(level, k1, k2));
-            } else {
-                assert!(!v.overlap_in_level(level, k1, k2));
-            }
-        }
-    }
-
-    #[test]
-    fn test_version_pick_memtable_output_level() {
-        let v = make_version().0;
-
-        for c in [
-            ("000".as_bytes(), "abc".as_bytes(), 0),
-            ("gab".as_bytes(), "hhh".as_bytes(), 1),
-            ("000".as_bytes(), "111".as_bytes(), 2),
-        ]
-        .iter()
-        {
-            assert_eq!(c.2, v.pick_memtable_output_level(c.0, c.1));
-        }
-    }
-
-    #[test]
-    fn test_version_overlapping_inputs() {
-        let v = make_version().0;
-
-        time_test!("overlapping-inputs");
-        {
-            // Range is expanded in overlapping level-0 files.
-            let from = LookupKey::new("aab".as_bytes(), MAX_SEQUENCE_NUMBER);
-            let to = LookupKey::new("aae".as_bytes(), 0);
-            let r = v.overlapping_inputs(0, from.internal_key(), to.internal_key());
-            assert_eq!(r.len(), 2);
-            assert_eq!(r[0].borrow().num, 1);
-            assert_eq!(r[1].borrow().num, 2);
-        }
-        {
-            let from = LookupKey::new("cab".as_bytes(), MAX_SEQUENCE_NUMBER);
-            let to = LookupKey::new("cbx".as_bytes(), 0);
-            // expect one file.
-            let r = v.overlapping_inputs(1, from.internal_key(), to.internal_key());
-            assert_eq!(r.len(), 1);
-            assert_eq!(r[0].borrow().num, 3);
-        }
-        {
-            let from = LookupKey::new("cab".as_bytes(), MAX_SEQUENCE_NUMBER);
-            let to = LookupKey::new("ebx".as_bytes(), 0);
-            let r = v.overlapping_inputs(1, from.internal_key(), to.internal_key());
-            // Assert that correct number of files and correct files were returned.
-            assert_eq!(r.len(), 3);
-            assert_eq!(r[0].borrow().num, 3);
-            assert_eq!(r[1].borrow().num, 4);
-            assert_eq!(r[2].borrow().num, 5);
-        }
-        {
-            let from = LookupKey::new("hhh".as_bytes(), MAX_SEQUENCE_NUMBER);
-            let to = LookupKey::new("ijk".as_bytes(), 0);
-            let r = v.overlapping_inputs(2, from.internal_key(), to.internal_key());
-            assert_eq!(r.len(), 0);
-            let r = v.overlapping_inputs(1, from.internal_key(), to.internal_key());
-            assert_eq!(r.len(), 0);
-        }
-    }
-
-    #[test]
-    fn test_version_record_read_sample() {
-        let mut v = make_version().0;
-        let k = LookupKey::new("aab".as_bytes(), MAX_SEQUENCE_NUMBER);
-        let only_in_one = LookupKey::new("cax".as_bytes(), MAX_SEQUENCE_NUMBER);
-
-        assert!(!v.record_read_sample(k.internal_key()));
-        assert!(!v.record_read_sample(only_in_one.internal_key()));
-
-        for fs in v.fileMetaHandleVecArr.iter() {
-            for f in fs {
-                f.borrow_mut().allowed_seeks = 0;
-            }
-        }
-        assert!(v.record_read_sample(k.internal_key()));
-    }
-
-    #[test]
-    fn test_version_key_ordering() {
-        time_test!();
-        let fmh = new_file(1, &[1, 0, 0], 0, &[2, 0, 0], 1);
-        let cmp = InternalKeyCmp(Rc::new(Box::new(DefaultCmp)));
-
-        // Keys before file.
-        for k in &[&[0][..], &[1], &[1, 0], &[0, 9, 9, 9]] {
-            assert!(key_is_before_file(&cmp, k, &fmh));
-            assert!(!key_is_after_file(&cmp, k, &fmh));
-        }
-        // Keys in file.
-        for k in &[
-            &[1, 0, 0][..],
-            &[1, 0, 1],
-            &[1, 2, 3, 4],
-            &[1, 9, 9],
-            &[2, 0, 0],
-        ] {
-            assert!(!key_is_before_file(&cmp, k, &fmh));
-            assert!(!key_is_after_file(&cmp, k, &fmh));
-        }
-        // Keys after file.
-        for k in &[&[2, 0, 1][..], &[9, 9, 9], &[9, 9, 9, 9]] {
-            assert!(!key_is_before_file(&cmp, k, &fmh));
-            assert!(key_is_after_file(&cmp, k, &fmh));
-        }
-    }
-
-    #[test]
-    fn test_version_file_overlaps() {
-        time_test!();
-
-        let files_disjoint = [
-            new_file(1, &[2, 0, 0], 0, &[3, 0, 0], 1),
-            new_file(2, &[3, 0, 1], 0, &[4, 0, 0], 1),
-            new_file(3, &[4, 0, 1], 0, &[5, 0, 0], 1),
-        ];
-        let files_joint = [
-            new_file(1, &[2, 0, 0], 0, &[3, 0, 0], 1),
-            new_file(2, &[2, 5, 0], 0, &[4, 0, 0], 1),
-            new_file(3, &[3, 5, 1], 0, &[5, 0, 0], 1),
-        ];
-        let cmp = InternalKeyCmp(Rc::new(Box::new(DefaultCmp)));
-
-        assert!(some_file_overlaps_range(
-            &cmp,
-            &files_joint,
-            &[2, 5, 0],
-            &[3, 1, 0]
-        ));
-        assert!(some_file_overlaps_range(
-            &cmp,
-            &files_joint,
-            &[2, 5, 0],
-            &[7, 0, 0]
-        ));
-        assert!(some_file_overlaps_range(
-            &cmp,
-            &files_joint,
-            &[0, 0],
-            &[2, 0, 0]
-        ));
-        assert!(some_file_overlaps_range(
-            &cmp,
-            &files_joint,
-            &[0, 0],
-            &[7, 0, 0]
-        ));
-        assert!(!some_file_overlaps_range(
-            &cmp,
-            &files_joint,
-            &[0, 0],
-            &[0, 5]
-        ));
-        assert!(!some_file_overlaps_range(
-            &cmp,
-            &files_joint,
-            &[6, 0],
-            &[7, 5]
-        ));
-
-        assert!(some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[2, 0, 1],
-            &[2, 5, 0]
-        ));
-        assert!(some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[3, 0, 1],
-            &[4, 9, 0]
-        ));
-        assert!(some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[2, 0, 1],
-            &[6, 5, 0]
-        ));
-        assert!(some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[0, 0, 1],
-            &[2, 5, 0]
-        ));
-        assert!(some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[0, 0, 1],
-            &[6, 5, 0]
-        ));
-        assert!(!some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[0, 0, 1],
-            &[0, 1]
-        ));
-        assert!(!some_file_overlaps_range_disjoint(
-            &cmp,
-            &files_disjoint,
-            &[6, 0, 1],
-            &[7, 0, 1]
-        ));
     }
 }

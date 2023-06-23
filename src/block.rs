@@ -271,7 +271,7 @@ impl LdbIterator for BlockIter {
             let middle = (left + right + 1) / 2;
             self.seek_to_restart_point(middle);
 
-            let c = self.opt.cmp.cmp(&self.key, to);
+            let c = self.opt.comparator.compare(&self.key, to);
 
             if c == Ordering::Less {
                 left = middle;
@@ -286,7 +286,7 @@ impl LdbIterator for BlockIter {
 
         // Linear search from here on
         while let Some((k, _)) = self.next() {
-            if self.opt.cmp.cmp(k.as_slice(), to) >= Ordering::Equal {
+            if self.opt.comparator.compare(k.as_slice(), to) >= Ordering::Equal {
                 return;
             }
         }

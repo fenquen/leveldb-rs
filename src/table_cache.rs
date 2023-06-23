@@ -35,7 +35,7 @@ pub struct TableCache {
 impl TableCache {
     /// Create a new TableCache for the database named `db`, caching up to `entries` tables.
     ///
-    /// opt.cmp should be the user-supplied comparator.
+    /// opt.cmp should be the user-supplied Comparator.
     pub fn new<P: AsRef<Path>>(dbName: P,
                                options: Options,
                                cacheCapacity: usize) -> TableCache {

@@ -29,8 +29,7 @@ pub enum StatusCode {
     Errno(errno::Errno),
 }
 
-/// Status encapsulates a `StatusCode` and an error message. It can be displayed, and also
-/// implements `Error`.
+/// Status encapsulates a `StatusCode` and an error message. It can be displayed, and also implements `Error`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub code: StatusCode,

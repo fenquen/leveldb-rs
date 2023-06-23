@@ -1,4 +1,4 @@
-use crate::cmp::{Cmp, MemtableKeyCmp};
+use crate::cmp::{Comparator, MemtableKeyCmp};
 use crate::rand::rngs::StdRng;
 use crate::rand::{RngCore, SeedableRng};
 use crate::types::LdbIterator;
@@ -30,7 +30,7 @@ struct InnerSkipMap {
     len: usize,
     // approximation of memory used.
     approx_mem: usize,
-    cmp: Rc<Box<dyn Cmp>>,
+    cmp: Rc<Box<dyn Comparator>>,
 }
 
 impl Drop for InnerSkipMap {
@@ -48,13 +48,13 @@ pub struct SkipMap {
 }
 
 impl SkipMap {
-    /// Returns a SkipMap that wraps the comparator inside a MemtableKeyCmp.
-    pub fn new_memtable_map(cmp: Rc<Box<dyn Cmp>>) -> SkipMap {
+    /// Returns a SkipMap that wraps the Comparator inside a MemtableKeyCmp.
+    pub fn new_memtable_map(cmp: Rc<Box<dyn Comparator>>) -> SkipMap {
         SkipMap::new(Rc::new(Box::new(MemtableKeyCmp(cmp))))
     }
 
-    /// Returns a SkipMap that uses the specified comparator.
-    pub fn new(cmp: Rc<Box<dyn Cmp>>) -> SkipMap {
+    /// Returns a SkipMap that uses the specified Comparator.
+    pub fn new(cmp: Rc<Box<dyn Comparator>>) -> SkipMap {
         let mut s = Vec::new();
         s.resize(MAX_HEIGHT, None);
 
@@ -127,7 +127,7 @@ impl InnerSkipMap {
         loop {
             unsafe {
                 if let Some(next) = (*current).skips[level] {
-                    let ord = self.cmp.cmp((*next).key.as_slice(), key);
+                    let ord = self.cmp.compare((*next).key.as_slice(), key);
 
                     match ord {
                         Ordering::Less => {
@@ -152,7 +152,7 @@ impl InnerSkipMap {
         unsafe {
             if current.is_null() || current == self.head.as_ref() {
                 None
-            } else if self.cmp.cmp(&(*current).key, key) == Ordering::Less {
+            } else if self.cmp.compare(&(*current).key, key) == Ordering::Less {
                 None
             } else {
                 Some(&(*current))
@@ -170,7 +170,7 @@ impl InnerSkipMap {
         loop {
             unsafe {
                 if let Some(next) = (*current).skips[level] {
-                    let ord = self.cmp.cmp((*next).key.as_slice(), key);
+                    let ord = self.cmp.compare((*next).key.as_slice(), key);
 
                     match ord {
                         Ordering::Less => {
@@ -191,7 +191,7 @@ impl InnerSkipMap {
             if current.is_null() || current == self.head.as_ref() {
                 // If we're past the end for some reason or at the head
                 None
-            } else if self.cmp.cmp(&(*current).key, key) != Ordering::Less {
+            } else if self.cmp.compare(&(*current).key, key) != Ordering::Less {
                 None
             } else {
                 Some(&(*current))
@@ -220,7 +220,7 @@ impl InnerSkipMap {
             unsafe {
                 if let Some(next) = (*current).skips[level] {
                     // If the wanted position is after the current node
-                    let ord = self.cmp.cmp(&(*next).key, &key);
+                    let ord = self.cmp.compare(&(*next).key, &key);
 
                     assert!(ord != Ordering::Equal, "No duplicates allowed");
 
